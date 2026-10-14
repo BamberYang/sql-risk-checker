@@ -1,0 +1,19 @@
+# 构建产物
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+
+# 工具运行产物
+sql_risk_report.json

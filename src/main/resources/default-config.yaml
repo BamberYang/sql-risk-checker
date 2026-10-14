@@ -1,0 +1,17 @@
+# SQL 上线风险静态检查工具 —— 内置默认配置（骨架占位）
+# 结构与取值说明见《概要设计》§5.2 / §9.2；具体规则默认值待实现阶段填充。
+# 注意：保守策略固定启用、不可关闭，无对应配置开关。
+
+# 规则级别调整与开关（同 ruleId 覆盖内置默认；未知 ruleId 告警忽略）
+rules: []
+
+# 表元数据 JSON 路径（相对本文件所在目录；可被 --metadata 覆盖）
+# 元数据为必需输入：文件缺失或格式错误将报错退出（exit 2）
+metadata_file: ./sql-risk-metadata.json
+
+# 低危不推荐写法关键字表（L1 规则）
+low_risk_keywords: []
+
+# 白名单：仅支持完整匹配 与 namespace.* 前缀匹配（Lambda 类语句不参与校验）
+whitelist:
+  statements: []
