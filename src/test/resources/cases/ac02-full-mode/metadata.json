@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "tables": [
+    {
+      "table": "t_order",
+      "fields": [
+        { "name": "id", "type": "BIGINT" },
+        { "name": "status", "type": "VARCHAR(16)" }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"] },
+        { "name": "idx_status", "columns": ["status"] }
+      ]
+    }
+  ]
+}

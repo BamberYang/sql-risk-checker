@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.D">
+  <sql id="inner">inner_id, <include refid="com.demo.mapper.Common.orderCols"/></sql>
+</mapper>

@@ -7,7 +7,7 @@
 | 项    | 内容                                          |
 | ---- | ------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具概要设计                          |
-| 版本   | v1.2                                        |
+| 版本   | v1.7                                        |
 | 日期   | 2026-10-14                                  |
 | 关联文档 | 《SQL 上线风险静态检查工具需求文档》v1.0（下称"需求文档"）          |
 | 覆盖范围 | 总体架构、模块划分、接口契约、关键流程与算法、数据模型、异常处理、测试设计、需求追溯 |
@@ -20,6 +20,11 @@
 | v1.0 | 2026-10-14 | 首版                                                                                                                                                                         |
 | v1.1 | 2026-10-14 | 按需求方评审意见更新：最终风险结果新增 **SKIP** 归类（解析失败计入 SKIP）；移除 H4/H5 规则（`SELECT *` 无过滤由 H3 覆盖）；移除 M7 规则及 `bulk_operation_threshold` 配置；明确 `${}` 短路扫描含被丢弃分支；元数据文件缺失（含默认路径）改为报错 |
 | v1.2 | 2026-10-14 | 按需求方评审意见更新：移除保守策略开关（`conservative_if_always_false`），保守策略固定启用、不可配置关闭 |
+| v1.3 | 2026-10-14 | 按需求方评审意见更新：明确增量 SQL 改动语义——行级命中即提取**完整 SQL** 分析；`<sql>` 片段（含被 `<include>` 引用，含传递、跨文件引用）变更时，所有引用语句均按变更处理并完整分析 |
+| v1.4 | 2026-10-14 | 按需求方评审意见更新：确认工作区未提交更改不参与 diff，DIFF 模式两端均为提交树（old=prod、new=head） |
+| v1.5 | 2026-10-14 | 按需求方评审意见更新：FULL 模式缺省取当前 HEAD 提交树进行全量分析，同样不包含工作区未提交内容（两个模式数据源统一为提交树） |
+| v1.6 | 2026-10-14 | 按需求方评审意见更新：确认普通 QueryWrapper / BaseMapper 内置方法**不纳入** v1 扫描范围（写入 §15 已知限制）；确认 JSON 报告追加字段（含 `changeType: FULL`）可接受 |
+| v1.7 | 2026-10-14 | 按需求方评审意见更新：确认 XML 解析采用 JDK SAX + Locator（决策 D3）；全部决策确认完毕，待确认事项清零 |
 
 > 本文档中标注【决策】的条目为概要设计阶段新增的设计决定，标注【假设】的条目需需求方确认后方可进入编码（汇总见 §14）。
 
@@ -91,7 +96,7 @@
 | `config`     | yaml 配置加载、默认值合并、schema 校验、配置优先级                                     | `AppConfig`、`ConfigLoader`、`ConfigValidator`、`RuleConfig`                                                                                                |
 | `metadata`   | 表元数据（表/字段/索引）加载与查询，`MetadataProvider` SPI                        | `MetadataProvider`、`JsonMetadataProvider`、`TableMetadata`、`FieldMeta`、`IndexMeta`                                                                         |
 | `diff`       | JGit 差异获取、全量扫描、变更行集合、`ProductionCommitProvider` SPI                | `GitDiffService`、`ChangeSet`、`FileChange`、`Hunk`、`ProductionCommitProvider`、`RepoWalker`                                                                  |
-| `extractor`  | 语句提取三个实现 + 统一 SPI；statementId 生成；变更类型判定                              | `SqlSourceExtractor`、`MapperXmlExtractor`、`AnnotationSqlExtractor`、`LambdaSqlExtractor`、`EntityIndex`、`TableColumnResolver`、`JavaConstantResolver`、`ProviderMethodResolver` |
+| `extractor`  | 语句提取三个实现 + 统一 SPI；statementId 生成；变更类型判定；XML 片段索引与派生变更传播                 | `SqlSourceExtractor`、`MapperXmlExtractor`、`XmlFragmentIndex`、`AnnotationSqlExtractor`、`LambdaSqlExtractor`、`EntityIndex`、`TableColumnResolver`、`JavaConstantResolver`、`ProviderMethodResolver` |
 | `parser`     | 动态 SQL 保守求值（骨架生成 + 丢弃溯源）、Lambda 骨架渲染、占位符归一化、Druid 解析、语句事实提取       | `DynamicEvaluator`、`LambdaSkeletonRenderer`、`PlaceholderNormalizer`、`DruidSqlParser`、`QueryFacts`、`SqlSkeleton`、`DroppedBranch`、`ParseFailure`        |
 | `rule`       | 规则 SPI、注册与配置覆盖、执行顺序与短路、内置规则                                             | `Rule`、`RuleEngine`、`RuleRegistry`、`RuleContext`、`builtin`（内置规则实现）                                                                                     |
 | `report`     | 控制台摘要与 JSON 报告生成、文件写出                                                | `ConsoleReporter`、`JsonReporter`、`ReportWriter`、`ReportModel`                                                                                             |
@@ -166,8 +171,8 @@ sql-risk-checker/                      # 单模块 Maven 工程
 | --- | --------- | --------------------------------- | ----------------------------------------------- | --------------------------------------- |
 | P0  | 参数装配      | 命令行参数                             | `RunContext`                                    | 缺参/非法值 → stderr + exit 2                |
 | P1  | 配置加载校验    | 用户 yaml、表元数据 JSON、缺省配置            | `AppConfig`、`MetadataProvider`                  | 配置错误 → exit 2                          |
-| P2  | 模式判定与差异获取 | repo、head/prod commit              | `ChangeSet`（差异模式）或候选文件清单（全量模式）                    | 非 git 仓库/非法 commit → exit 2             |
-| P3  | 语句提取      | `ChangeSet` + extractor SPI       | `List<ExtractedStatement>` + `skipped[]`        | 单文件失败隔离，不终止整体                           |
+| P2  | 模式判定与差异获取 | repo、head/prod commit              | `ChangeSet`（差异模式）或候选文件清单（全量模式，取自 head 提交树）        | 非 git 仓库/非法 commit → exit 2             |
+| P3  | 语句提取      | `ChangeSet` + extractor SPI + 全仓 XML 片段索引 | `List<ExtractedStatement>`（含片段派生变更命中的语句）+ `skipped[]` | 单文件失败隔离，不终止整体 |
 | P4  | 白名单过滤     | 语句集合 + 白名单配置                      | 分析集合 + `ignored[]`                              | —                                       |
 | P5  | 骨架生成      | `ExtractedStatement`（动态片段/Lambda 模型） | `SqlSkeleton[]`（含丢弃分支溯源）                        | 无法生成 → `skipped[]`                      |
 | P6  | 解析与事实提取   | 骨架文本（占位符归一化后）                     | `ParsedSql`（Druid AST + `QueryFacts`）            | 解析失败 → 计入 **SKIP**（`skipped[]`），不中断、不影响退出码     |
@@ -203,15 +208,16 @@ CLI          Engine         Config/Diff     Extractor      Parser        Rule   
 
 | 维度     | DIFF 模式（传 `--prod-commit`）      | FULL 模式（未传 `--prod-commit`，含未传 head） |
 | ------ | ------------------------------ | ---------------------------------- |
-| 差异获取   | `git diff <prod> <head>`（JGit） | 跳过 diff，遍历工作区候选文件                  |
-| 语句范围   | 仅变更命中语句（新增/修改，删除排除）            | 仓库内全部语句                            |
+| 差异获取   | `git diff <prod> <head>`（JGit） | 跳过 diff，遍历 head commit 提交树中全部候选文件      |
+| 语句范围   | 仅变更命中语句（新增/修改，删除排除）            | head commit 提交树内全部语句                 |
 | changeType | `ADDED` / `MODIFIED`           | `FULL`【决策 D5】                       |
 | 报告字段   | 含 headCommit、prodCommit         | `prodCommit: null`、`mode: "FULL"`   |
 | 用途     | 上线前增量检查                        | 首次接入摸底、全量体检                        |
 
 补充规则：
 
-- `--head-commit` 缺省取当前 HEAD，且**只分析 commit 内容**，工作区未提交修改不参与（需求原文"当前工作区 HEAD"）。【决策，需确认：是否需要工作区 diff 模式】
+- `--head-commit` 缺省取当前 HEAD；**diff 两端均为提交树**（old=prod commit 树，new=head commit 树），工作区未提交更改**不参与 diff**（需求原文"当前工作区 HEAD"）。【决策 D21（已确认）】
+- FULL 模式数据源同样为**提交树**：缺省取当前 HEAD（可用 `--head-commit` 指定），遍历该提交树内的全部承载文件；**工作区未提交内容不参与**。【决策 D22（已确认）】
 - `--head-commit` 与 `--prod-commit` 相同 → 空 diff → 0 条语句，正常退出（exit 0，提示"无差异语句"）。
 - rename 文件按"删除+新增"处理（仅新增侧参与分析）。【决策 D15】
 
@@ -282,7 +288,7 @@ public final class FileChange {
 }
 ```
 
-- 全量模式：`RepoWalker` 遍历工作区，收集候选文件（`*.java`、`*.xml`），默认排除 `.git/`、`target/`、`build/`、`out/`、`.idea/`、`node_modules/`，排除列表可通过配置扩展。
+- 全量模式：`RepoWalker` 以 **head commit（缺省 HEAD）的提交树**为数据源，经 JGit `TreeWalk` 遍历收集候选文件（`*.java`、`*.xml`），文件内容从提交 blob 读取（**不读工作目录，未提交更改不参与**）；默认排除 `target/`、`build/`、`out/`、`.idea/`、`node_modules/`，排除列表可通过配置扩展。【决策 D22】
 - `ProductionCommitProvider` SPI（FR-1 预留）：
 
 ```java
@@ -328,6 +334,11 @@ public final class ExtractedStatement {
 4. 按行范围**截取语句元素原文**（含全部动态标签），交给 parser 处理；同时计算与 diff 变更行的交集（算法见 §8.1）判定 ADDED / MODIFIED / 未变更。
 5. 同一语句一行删一行改 → MODIFIED（由交集算法天然覆盖）。
 6. DOCTYPE/EntityResolver：为 MyBatis DTD 注册**返回空内容的 EntityResolver**，禁止任何外部实体与网络取 DTD（离线要求 + XXE 防护）。
+7. **片段索引与派生变更（增量语义，已确认）**：提取前对仓库**全部** mapper.xml 建立 `XmlFragmentIndex`（仅 `.xml`、SAX 流式，记录 `<sql id>` 定义位置与 `<include refid>` 引用点，开销可控）：
+   - refid 解析：裸 `id` → 同 namespace；`namespace.id` → 跨文件解析；
+   - 建立「`<sql>` 片段 ← 引用方」反向依赖图（引用方含语句与其它片段，支持传递闭包；循环引用以 visited 集合防重入）；
+   - 差异模式下，变更行落入某 `<sql>` 片段 → 反向图闭包内**所有引用语句**均按 MODIFIED 提取其完整 SQL（即使语句所在文件自身无变更），并记录派生来源 `changedVia = 片段 refid`；
+   - 无法解析的 refid → 按 §5.6 解析失败处理（计入 SKIP，不静默）。
 
 #### 5.5.3 注解类 SQL
 
@@ -343,6 +354,8 @@ public final class ExtractedStatement {
 
 识别目标（`supports()` 的语法特征）：`new LambdaQueryWrapper<X>()`、`new LambdaUpdateWrapper<X>()`、`Wrappers.<X>lambdaQuery()/lambdaUpdate()`、`<mapper实例>.lambdaQuery()/lambdaUpdate()`、`<ServiceImpl子类>.lambdaQuery()/lambdaUpdate()`、`new QueryWrapper<X>().lambda()`、`Wrapper.lambda()`。
 
+> 范围边界【决策 D23（已确认）】：普通 `QueryWrapper`（字符串列名链式，未经 `.lambda()` 转换）与 `BaseMapper` 内置方法（`selectById/deleteById/…`）**不纳入**识别与扫描范围（维持需求 FR-2 界定，见 §15.1）。
+
 处理流程（对应 §8.3 算法）：
 
 1. **实体类型解析**（优先级）：显式泛型 → `Wrappers.lambdaQuery(X.class)` 的 Class 参数 → 变量声明类型 → 调用接收者类型（mapper 接口 `extends BaseMapper<T>` / 服务类 `extends ServiceImpl<M,T>` 的泛型实参）→ 失败则表名标记为 `?`（unknown）。
@@ -351,6 +364,7 @@ public final class ExtractedStatement {
 4. **渲染为 SQL 骨架文本**（`?` 占位），交给 parser —— 与其余两种形态共用管道（原则 P1）。
 5. statementId = `文件名(不含路径):行号`，行号取**链式表达式根调用所在行**（如 `new LambdaQueryWrapper<Order>()` 或 `orderMapper.lambdaQuery()` 的行号）；该 ID 不参与白名单校验（FR-6）。
 6. 还原不完整场景（wrapper 由方法参数传入、条件在外部拼接等）→ 标记 `uncertain=true` 并按"可能缺失条件"继续分析（原则 P2），不静默丢弃。【决策 D11】
+7. **语句范围（增量语义）**：链式构造表达式 ∪ 该 wrapper 变量可见的执行调用行（如 `mapper.selectList(w)`，经变量引用追踪定位）；范围内**任意一行**变更 → 提取完整链 SQL 分析（§8.1）。
 
 ### 5.6 parser
 
@@ -463,7 +477,7 @@ AnalysisResult ◄────────────────────�
 
 | 模型                       | 关键字段                                                                                                                        |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `StatementResult`        | statementId、source、file、line、changeType、sql（骨架文本）、findings[]、level（最高命中级别，可为空）、uncertain                          |
+| `StatementResult`        | statementId、source、file、line、changeType、sql（骨架文本）、findings[]、level（最高命中级别，可为空）、uncertain、changedVia（可空：因 `<sql>` 片段变更派生命中时的片段 refid） |
 | `Finding`                | ruleId、level、message、snippet、skeletonIndex（命中的骨架序号，用于解释 choose 多骨架/保守折叠场景）                                          |
 | `SqlSkeleton`            | text、droppedBranches[]、strategyTag（如 `choose:when#0`）、hasDollarPlaceholder、hasUnknownFragment、uncertain                    |
 | `DroppedBranch`          | branchType(IF/WHEN/OTHERWISE)、reason(CONSERVATIVE_FALSE/RUNTIME_CONDITION)、role(CONDITION/SET/JOIN_ON/RAW)、fragmentText             |
@@ -516,6 +530,14 @@ public interface ExecutionPlanAnalyzer {
 | MODIFIED | 上述均不满足                                                                | 该语句未变更，不提取 |
 | 无法判定     | 语句跨多个 hunk 且启发式冲突                                                     | 取保守值 MODIFIED |
 
+**语句级完整性原则（已确认）**：只要语句范围内有**任意一行**进入变更集，就提取该语句的**完整 SQL**（含全部动态标签与展开的片段）做风险分析，绝不只分析改动行片段。三种承载形态一致适用：
+
+- mapper.xml：语句元素的行范围（含元素内任意行）；
+- 注解 / Provider：注解及其所在方法声明范围；
+- Lambda 链：链式构造表达式 ∪ wrapper 执行调用行（§5.5.4 第 7 条）。
+
+**`<sql>` 片段派生变更（已确认）**：变更行落在 `<sql id>` 片段定义内（而不在任何语句内）时，通过 `XmlFragmentIndex` 的反向依赖闭包（含传递引用与跨文件 `namespace.id` 引用）找到**所有引用该片段的语句**，每条均按 MODIFIED 提取完整 SQL 分析，报告中记录派生来源 `changedVia`。`<script>` 注解中的 `<include>` 同样经片段索引解析与传播。
+
 全量模式：全部语句 → `FULL`。
 
 ### 8.2 保守策略求值（FR-3 / FR-5）
@@ -530,7 +552,7 @@ public interface ExecutionPlanAnalyzer {
 | `<set>`                               | 折叠：去掉尾部多余 `,`；内容为空则整块省略                                                                            | —                                |
 | `<trim>`                              | 按 `prefix/suffix/prefixOverrides/suffixOverrides` 标准行为折叠                                          | —                                |
 | `<foreach>`                           | 单元素展开（代表展开）：`open` + 一次 body 渲染（item 值→`?`）+ `close`；记录"集合长度不定"事实                                       | —                                |
-| `<include refid>` + `<property>`      | 先解析 `<sql>` 片段并替换属性占位符再求值（需求未列，但为 mapper.xml 实际必需能力）【决策】                                             | 解析失败 → 计入 SKIP（不静默）             |
+| `<include refid>` + `<property>`      | 先经 `XmlFragmentIndex` 解析 `<sql>` 片段并替换属性占位符再求值（需求未列，但为 mapper.xml 实际必需能力）【决策】                          | 解析失败 → 计入 SKIP（不静默）             |
 | 其他未知标签                                | 视为不透明片段，标记 `hasUnknownFragment`，不崩溃                                                                  | -                                |
 
 丢弃溯源的用途：求值后若最终骨架无 WHERE，`DroppedBranch` 记录仅作为 Finding 的提示证据（如 H1/H2/H3 的 message 附注"WHERE 条件位于动态分支内，按保守策略视为不成立"）——保守策略属于**解析阶段语义**，不再衍生独立风险规则（决策 D19）。
@@ -624,7 +646,7 @@ boolean hit = id.equals(pattern)                     // 完整匹配
 | 参数                    | 必填 | 说明                              |
 | --------------------- | -- | ------------------------------- |
 | `--repo <path>`       | 是  | 目标 Git 仓库绝对路径                   |
-| `--head-commit <sha>` | 否  | 缺省取当前 HEAD                      |
+| `--head-commit <sha>` | 否  | 缺省取当前 HEAD；DIFF/FULL 均以提交树为数据源，工作区未提交更改不参与（D21/D22） |
 | `--prod-commit <sha>` | 否  | 不传 → 全量分析                       |
 | `--config <path>`     | 否  | 缺省用内置默认配置                       |
 | `--output <path>`     | 否  | 报告输出目录，缺省当前目录                   |
@@ -674,7 +696,7 @@ boolean hit = id.equals(pattern)                     // 完整匹配
 JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式（additive），不破坏既有契约字段**【决策 D5】：
 
 - 顶层新增 `"mode": "DIFF" | "FULL"`；
-- `results[]` 新增 `"source": "MAPPER_XML|ANNOTATION|LAMBDA"`、`"uncertain": true|false`；
+- `results[]` 新增 `"source": "MAPPER_XML|ANNOTATION|LAMBDA"`、`"uncertain": true|false`、可选 `"changedVia"`（因 `<sql>` 片段变更派生命中时给出片段 refid）；
 - `findings[]` 新增 `"skeleton": 0`（命中的骨架序号，解释 choose 多骨架/保守折叠场景）；
 - 需求中的 `parseFailed` 独立字段**取消**：解析失败并入 `skipped[]`（`reason` 形如 `解析失败：…`），summary 中对应合并为 `skip`（**SKIP 类别计数**）【决策 D6（已确认）】。
 
@@ -743,7 +765,8 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
   `cases/<caseId>/{repo 生成脚本, config.yaml, metadata.json, expected-report.json}`。
 - 比对：运行完整管线，报告 JSON 去除 `generatedAt` 后与 expected 全量比对（固定时钟注入）。
 - 覆盖矩阵：3 种承载形态 × 风险等级 × 差异/全量模式 × 白名单 × 保守策略（AC-4：`<if>` 唯一条件折叠后 WHERE 消失 → 直接命中 H1/H2/H3；`<choose>` 双骨架任一命中即停）；含 SKIP 归类用例（解析失败不计入高危、不影响退出码）。
-- AC 映射：AC-1→diff 用例；AC-2→全量用例；AC-3/4/5→规则与动态用例；AC-6→Lambda 用例；AC-7→白名单用例；AC-8→报告快照；AC-9→错误码用例（非 git 仓库/非法 commit/坏配置/元数据文件缺失各 1）；AC-10→CI 构建；AC-11→`${}` 短路用例。
+- 增量语义用例（v1.3 已确认）：`<sql>` 片段内改动 → 全部（含跨文件、传递引用）语句提取完整 SQL 分析；Lambda 链上任意一行（含 wrapper 执行调用行）改动 → 完整链提取。
+- AC 映射：AC-1→diff 用例；AC-2→全量用例（数据源为提交树，断言工作区未提交改动不纳入）；AC-3/4/5→规则与动态用例；AC-6→Lambda 用例；AC-7→白名单用例；AC-8→报告快照；AC-9→错误码用例（非 git 仓库/非法 commit/坏配置/元数据文件缺失各 1）；AC-10→CI 构建；AC-11→`${}` 短路用例。
 
 ### 12.3 构建与 CI 前置
 
@@ -778,9 +801,9 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 | --- | ---- | --------------------------------------------------------------------------------------------- | ----------- |
 | D1  | 决策   | 单 Maven 模块 + 包级模块化 + shade fat jar；多模块拆分留作后续演进                                                   | §3.4        |
 | D2  | 决策   | 三种承载形态统一收敛为 SQL 骨架文本，复用同一 Druid 解析与规则引擎                                                        | §5.5、§5.6   |
-| D3  | 决策（偏离需求建议） | XML 解析采用 JDK SAX + Locator（需求建议 dom4j/DocumentBuilder）；理由：精确行号（diff 映射必需）、零依赖、XXE 加固方便                | §5.5.2      |
+| D3  | 决策（已确认，偏离需求建议） | XML 解析采用 JDK SAX + Locator（需求建议 dom4j/DocumentBuilder）；理由：精确行号（diff 映射必需）、零依赖、XXE 加固方便                | §5.5.2      |
 | D4  | 决策   | JSON 序列化用 Gson（单 jar 零传递依赖）；日志用 stderr + slf4j-nop                                             | §3.5、§5.8   |
-| D5  | 决策   | `changeType` 扩展 `FULL`（全量模式）；报告新增 `mode`/`source`/`uncertain`/`skeleton` 等**追加式**字段              | §4.3、§9.4   |
+| D5  | 决策（已确认） | `changeType` 扩展 `FULL`（全量模式）；报告新增 `mode`/`source`/`uncertain`/`changedVia`/`skeleton` 等**追加式**字段 | §4.3、§9.4   |
 | D6  | 决策（已确认） | 最终风险结果新增 **SKIP** 类别：解析失败计入 SKIP，取消 `parseFailed` 独立字段与"高危待人工复核"处理；SKIP 不计入高危、不影响退出码         | §5.6、§9.4、§10 |
 | D7  | 决策（已确认） | 取消规则互斥矩阵（H4/H5 已移除）；保留：M8 语句级短路 + 多骨架首个命中即停                                                        | §8.6        |
 | D8  | 决策（已确认） | M8 的 `${}` 扫描范围为语句原文，**包含被丢弃分支**                                                            | §8.5        |
@@ -794,8 +817,14 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 | D17 | 澄清   | 规则编号 `L3`（需求缺号）与 `M7`（v1.1 移除）保留不复用                                                           | §5.7        |
 | D18 | 决策（已确认） | 移除 M7 规则及 `bulk_operation_threshold` 配置：静态扫描无法确定影响行数，不执行该规则                                       | §5.7、§9.2   |
 | D19 | 决策（已确认） | 移除 H4/H5 规则：`SELECT *` 无过滤场景由 H3 直接覆盖；"唯一条件在 `<if>` 内且视为 FALSE"属**解析阶段**保守策略语义（折叠后 WHERE 消失 → 由 H1/H2/H3 判定），不设独立风险规则 | §5.7、§8.2   |
+| D20 | 决策（已确认） | **增量改动语义**：行级命中 → 提取**完整语句**分析（XML 语句 / `<sql>` 片段 / 注解 / Lambda 链一致）；`<sql>` 片段变更向所有（含传递、跨文件）引用语句传播，均按 MODIFIED 并记录 `changedVia` | §5.5.2、§8.1 |
+| D21 | 决策（已确认） | **工作区未提交更改不参与 diff**：DIFF 模式两端均为提交树（old=prod commit，new=head commit）；不提供工作区 diff 模式          | §4.3        |
+| D22 | 决策（已确认） | **FULL 模式数据源为提交树**：缺省取当前 HEAD（可由 `--head-commit` 指定），遍历该提交树的全部承载文件，不读取工作区未提交内容        | §4.3、§5.4   |
+| D23 | 决策（已确认） | 普通 `QueryWrapper`（字符串列名）与 `BaseMapper` 内置方法**不纳入** v1 扫描范围（维持需求 FR-2 界定），写入 §15 已知限制 | §5.5.4、§15.1 |
 
-**需求文档中未明确、本设计已补齐的能力**：`<include refid>` 解析（§8.2）、`<script>` 注解与 mapper.xml 同管道（§5.5.3）、静态常量与 Provider 方法的静态求值（§5.5.3）、XXE 加固与离线 DTD 兜底（§5.5.2）。
+**需求文档中未明确、本设计已补齐的能力**：`<include refid>` 解析与片段派生变更（§8.2、§8.1）、`<script>` 注解与 mapper.xml 同管道（§5.5.3）、静态常量与 Provider 方法的静态求值（§5.5.3）、XXE 加固与离线 DTD 兜底（§5.5.2）。
+
+**待确认事项**：无——以上决策均已由需求方确认，设计可进入详细设计与编码阶段。
 
 ***
 
@@ -803,7 +832,7 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 
 ### 15.1 已知限制（补充需求 §15）
 
-1. `BaseMapper` 内置方法（`selectById/deleteById/…`）与 MP 逻辑删除自动追加条件不在扫描范围（非 Lambda 构造、无显式 SQL 文本）；报告中不体现——建议后续迭代评估是否纳入。
+1. **不在扫描范围（v1 已确认的范围边界，决策 D23）**：普通 `QueryWrapper`（字符串列名链式，包括 `new QueryWrapper<>()` 空条件全表扫描写法）与 `BaseMapper` 内置方法（`selectById/deleteById/…`）及 MP 逻辑删除自动追加条件，均不提取、不分析、报告中不体现（需求 FR-2 范围界定）；建议后续迭代评估是否纳入。
 2. Lambda 类的运行期条件（如 `eq(flag, col, v)` 中 flag 为变量）按保守策略丢弃，可能抬高误报率（设计预期内）。
 3. 方法外部传入的 wrapper、跨文件的条件拼装无法完整还原（已降级为 `uncertain`，见 D11）。
 4. 差异行映射为启发式（§8.1），极端多 hunk 场景可能把未变更语句判为 MODIFIED（保守方向，可接受）。
@@ -822,4 +851,4 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 
 ***
 
-*文档完。v1.2 按需求方评审意见修订：移除保守策略开关，保守策略固定启用（v1.1 已含：风险结果新增 SKIP 归类、移除 H4/H5/M7 规则、`${}` 扫描含被丢弃分支、元数据文件缺失报错）。§14 决策已全部确认，无待确认项。*
+*文档完。v1.7 按需求方评审意见修订：确认 XML 解析采用 JDK SAX + Locator（D3）。全部决策已确认，无待确认事项，设计可进入详细设计与编码阶段。*

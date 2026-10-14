@@ -1,0 +1,82 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "FULL",
+  "headCommit": "f8d62ea413b2d506a791e04893badf4a65d5824e",
+  "prodCommit": null,
+  "summary": {
+    "total": 4,
+    "high": 0,
+    "medium": 0,
+    "low": 2,
+    "skip": 0,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.B.byStatus",
+      "source": "ANNOTATION",
+      "file": "src/main/java/com/demo/mapper/B.java",
+      "line": 7,
+      "changeType": "FULL",
+      "sql": "SELECT id FROM t_order WHERE status = #{s}",
+      "findings": [
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT id FROM t_order WHERE status = #{s}",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.A.s1",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/A.xml",
+      "line": 3,
+      "changeType": "FULL",
+      "sql": "SELECT id FROM t_order WHERE id = #{id}",
+      "findings": [
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT id FROM t_order WHERE id = #{id}",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.A.u1",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/A.xml",
+      "line": 4,
+      "changeType": "FULL",
+      "sql": "UPDATE t_order SET status = #{s} WHERE id = #{id}",
+      "findings": [],
+      "level": null,
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.C.d1",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/C.xml",
+      "line": 3,
+      "changeType": "FULL",
+      "sql": "DELETE FROM t_order WHERE id = #{id}",
+      "findings": [],
+      "level": null,
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": []
+}

@@ -1,0 +1,104 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "1bf20cdb41cb5b388d338c218190b23141066041",
+  "prodCommit": "da31e93e333b007f0c80826c65df321999a7df2f",
+  "summary": {
+    "total": 4,
+    "high": 1,
+    "medium": 0,
+    "low": 2,
+    "skip": 0,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.OrderMapper.search",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 4,
+      "changeType": "ADDED",
+      "sql": "SELECT id, name, create_time FROM t_order WHERE name = #{n} AND id = #{id}",
+      "findings": [
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT id, name, create_time FROM t_order WHERE name = #{n} AND id = #{id}",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.updateIf",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 5,
+      "changeType": "ADDED",
+      "sql": "UPDATE t_order\n    SET updated_at = NOW()\n    WHERE id = #{id}",
+      "findings": [],
+      "level": null,
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.byIds",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 13,
+      "changeType": "ADDED",
+      "sql": "SELECT * FROM t_order WHERE id IN\n    (#{it})",
+      "findings": [
+        {
+          "ruleId": "L1",
+          "level": "LOW",
+          "message": "使用了不推荐写法：SELECT *",
+          "snippet": "SELECT * FROM t_order WHERE id IN (#{it})",
+          "skeleton": 0
+        },
+        {
+          "ruleId": "L2",
+          "level": "LOW",
+          "message": "SELECT * 且已有过滤，建议显式列出字段",
+          "snippet": "SELECT * FROM t_order WHERE id IN (#{it})",
+          "skeleton": 0
+        },
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT * FROM t_order WHERE id IN (#{it})",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.byKeyword",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 16,
+      "changeType": "ADDED",
+      "sql": "SELECT id FROM t_order",
+      "findings": [
+        {
+          "ruleId": "H3",
+          "level": "HIGH",
+          "message": "SELECT 无有效过滤条件（无 WHERE 且无 LIMIT），存在全表扫描风险（WHERE 条件位于动态分支内，按保守策略视为不成立）",
+          "snippet": "SELECT id FROM t_order",
+          "skeleton": 0
+        }
+      ],
+      "level": "HIGH",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": []
+}

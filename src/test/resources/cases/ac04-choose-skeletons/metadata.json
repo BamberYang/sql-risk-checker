@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "tables": [
+    {
+      "table": "t_order",
+      "fields": [
+        { "name": "id", "type": "BIGINT" },
+        { "name": "create_time", "type": "DATETIME" }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"] },
+        { "name": "idx_create_time", "columns": ["create_time"] }
+      ]
+    }
+  ]
+}

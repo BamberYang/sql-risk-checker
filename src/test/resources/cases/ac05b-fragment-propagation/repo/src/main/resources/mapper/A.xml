@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.A">
+  <select id="a">SELECT <include refid="com.demo.mapper.Common.orderCols"/> FROM t_order WHERE id = #{id}</select>
+</mapper>

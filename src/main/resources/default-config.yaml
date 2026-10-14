@@ -1,16 +1,58 @@
-# SQL 上线风险静态检查工具 —— 内置默认配置（骨架占位）
-# 结构与取值说明见《概要设计》§5.2 / §9.2；具体规则默认值待实现阶段填充。
+# SQL 上线风险静态检查工具 —— 内置默认配置
+# 合并规则：本文件 < 用户配置（--config，同 ruleId/键覆盖）< CLI 参数（--metadata 覆盖 metadata_file）。
 # 注意：保守策略固定启用、不可关闭，无对应配置开关。
+# 已移除配置项（出现时告警忽略）：bulk_operation_threshold、conservative_if_always_false。
 
-# 规则级别调整与开关（同 ruleId 覆盖内置默认；未知 ruleId 告警忽略）
-rules: []
+# 规则级别与开关（内置默认；ruleId 属于规则集 H1~H3 / M1~M6、M8 / L1、L2、L4）
+rules:
+  - ruleId: H1
+    level: HIGH
+    enabled: true
+  - ruleId: H2
+    level: HIGH
+    enabled: true
+  - ruleId: H3
+    level: HIGH
+    enabled: true
+  - ruleId: M1
+    level: MEDIUM
+    enabled: true
+  - ruleId: M2
+    level: MEDIUM
+    enabled: true
+  - ruleId: M3
+    level: MEDIUM
+    enabled: true
+  - ruleId: M4
+    level: MEDIUM
+    enabled: true
+  - ruleId: M5
+    level: MEDIUM
+    enabled: true
+  - ruleId: M6
+    level: MEDIUM
+    enabled: true
+  - ruleId: M8
+    level: MEDIUM
+    enabled: true
+  - ruleId: L1
+    level: LOW
+    enabled: true
+  - ruleId: L2
+    level: LOW
+    enabled: true
+  - ruleId: L4
+    level: LOW
+    enabled: true
 
-# 表元数据 JSON 路径（相对本文件所在目录；可被 --metadata 覆盖）
-# 元数据为必需输入：文件缺失或格式错误将报错退出（exit 2）
-metadata_file: ./sql-risk-metadata.json
+# 表元数据 JSON 路径：相对本文件所在目录解析（内置默认以【仓库根】为基准）。
+# 元数据为必需输入：文件缺失或格式错误将报错退出（exit 2）。
+metadata_file: sql-risk-metadata.json
 
-# 低危不推荐写法关键字表（L1 规则）
-low_risk_keywords: []
+# 低危不推荐写法关键字表（L1 规则；大小写不敏感、空白折叠后匹配）
+low_risk_keywords:
+  - "SELECT *"
+  - "OR 1=1"
 
 # 白名单：仅支持完整匹配 与 namespace.* 前缀匹配（Lambda 类语句不参与校验）
 whitelist:

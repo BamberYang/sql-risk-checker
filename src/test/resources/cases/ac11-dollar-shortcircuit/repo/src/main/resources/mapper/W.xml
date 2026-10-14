@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.W">
+  <select id="byWrapper">SELECT id FROM t_order WHERE 1 = 1</select>
+</mapper>

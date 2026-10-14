@@ -1,0 +1,90 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "103f1ac1ae8bad42bb9bd487d5ded9dc31914a1b",
+  "prodCommit": "fb3171156dfa388fb842e8ee049892c24131e860",
+  "summary": {
+    "total": 4,
+    "high": 3,
+    "medium": 0,
+    "low": 0,
+    "skip": 0,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.OrderMapper.banAll",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 3,
+      "changeType": "ADDED",
+      "sql": "UPDATE t_order SET banned = 1",
+      "findings": [
+        {
+          "ruleId": "H1",
+          "level": "HIGH",
+          "message": "UPDATE 语句缺少 WHERE，将全表更新，高危",
+          "snippet": "UPDATE t_order SET banned = 1",
+          "skeleton": 0
+        }
+      ],
+      "level": "HIGH",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.purgeAll",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 4,
+      "changeType": "ADDED",
+      "sql": "DELETE FROM t_order",
+      "findings": [
+        {
+          "ruleId": "H2",
+          "level": "HIGH",
+          "message": "DELETE 语句缺少 WHERE，将全表删除，高危",
+          "snippet": "DELETE FROM t_order",
+          "skeleton": 0
+        }
+      ],
+      "level": "HIGH",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.banByStatus",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 5,
+      "changeType": "ADDED",
+      "sql": "UPDATE t_order SET banned = 1",
+      "findings": [
+        {
+          "ruleId": "H1",
+          "level": "HIGH",
+          "message": "UPDATE 语句缺少 WHERE，将全表更新，高危（WHERE 条件位于动态分支内，按保守策略视为不成立）",
+          "snippet": "UPDATE t_order SET banned = 1",
+          "skeleton": 0
+        }
+      ],
+      "level": "HIGH",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.purgeOne",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 6,
+      "changeType": "ADDED",
+      "sql": "DELETE FROM t_order WHERE id = #{id} AND status = 2",
+      "findings": [],
+      "level": null,
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": []
+}

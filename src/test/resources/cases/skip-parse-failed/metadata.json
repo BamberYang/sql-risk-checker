@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "tables": [
+    {
+      "table": "t_order",
+      "fields": [
+        { "name": "id", "type": "BIGINT" },
+        { "name": "status", "type": "INT" }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"] }
+      ]
+    }
+  ]
+}

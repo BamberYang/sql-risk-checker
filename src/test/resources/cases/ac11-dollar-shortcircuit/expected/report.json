@@ -1,0 +1,38 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "b40047e515c759530b829f0c5e7f823a8600170f",
+  "prodCommit": "a3337cb56097a23723679f79ee9051299547a1d3",
+  "summary": {
+    "total": 1,
+    "high": 0,
+    "medium": 1,
+    "low": 0,
+    "skip": 0,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.W.byWrapper",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/W.xml",
+      "line": 3,
+      "changeType": "ADDED",
+      "sql": "<select id=\"byWrapper\">SELECT id FROM t_order WHERE 1 = 1 <if test=\"ew != null\">${ew.customSqlSegment}</if></select>",
+      "findings": [
+        {
+          "ruleId": "M8",
+          "level": "MEDIUM",
+          "message": "存在 ${} 拼串，归属中危，不再继续判断其他规则",
+          "snippet": "<select id=\"byWrapper\">SELECT id FROM t_order WHERE 1 = 1 <if test=\"ew != null\">${ew.customSqlSegment}</if></select>",
+          "skeleton": 0
+        }
+      ],
+      "level": "MEDIUM",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": []
+}

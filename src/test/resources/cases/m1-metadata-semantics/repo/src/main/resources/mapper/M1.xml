@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.M1">
+  <update id="updateStatus">UPDATE t_order SET amount = #{a} WHERE status = 1</update>
+  <update id="updatePlain">UPDATE t_plain SET amount = #{a} WHERE id = #{id}</update>
+  <select id="selectMissing">SELECT id FROM t_missing WHERE id = #{id}</select>
+  <select id="selectOk">SELECT id FROM t_order WHERE id = #{id}</select>
+</mapper>

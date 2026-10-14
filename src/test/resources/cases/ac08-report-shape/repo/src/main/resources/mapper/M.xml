@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.M">
+  <update id="updateAll">UPDATE t_order SET flag = 1 WHERE id = #{id}</update>
+  <select id="legacyOne">SELECT id FROM t_order WHERE id = #{id}</select>
+  <select id="broken">SELECT id FROM t_order WHERE id = #{id}</select>
+</mapper>

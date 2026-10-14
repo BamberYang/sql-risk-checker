@@ -1,0 +1,50 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "eecf3c604a19277327fe636f692af29d7199a7e8",
+  "prodCommit": "d5ce34ed648e48816eeebf32b53e330249c6b8e0",
+  "summary": {
+    "total": 2,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "skip": 0,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.OrderMapper.touchAll",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 4,
+      "changeType": "ADDED",
+      "sql": "UPDATE t_order SET status = #{s}, updated_at = NOW() WHERE id = #{id}",
+      "findings": [],
+      "level": null,
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.countActive",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 5,
+      "changeType": "ADDED",
+      "sql": "SELECT count(1) FROM t_order WHERE status = #{st}",
+      "findings": [
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT count(1) FROM t_order WHERE status = #{st}",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": []
+}

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.OrderMapper">
+  <select id="findByCode">SELECT id FROM t_order WHERE code = #{code}</select>
+  <select id="keepOne">SELECT id FROM t_order WHERE id = #{id}</select>
+</mapper>

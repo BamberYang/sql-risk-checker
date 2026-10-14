@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.OrderMapper">
+  <update id="banAll">UPDATE t_order SET banned = 1</update>
+  <delete id="purgeAll">DELETE FROM t_order</delete>
+  <update id="banByStatus">UPDATE t_order SET banned = 1 <if test="st != null">WHERE status = #{st}</if></update>
+  <delete id="purgeOne">DELETE FROM t_order WHERE id = #{id} AND status = 2</delete>
+</mapper>

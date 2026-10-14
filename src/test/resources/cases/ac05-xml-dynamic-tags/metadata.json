@@ -1,0 +1,19 @@
+{
+  "version": "1.0",
+  "tables": [
+    {
+      "table": "t_order",
+      "fields": [
+        { "name": "id", "type": "BIGINT" },
+        { "name": "name", "type": "VARCHAR(64)" },
+        { "name": "status", "type": "INT" },
+        { "name": "create_time", "type": "DATETIME" },
+        { "name": "updated_at", "type": "DATETIME" }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"] },
+        { "name": "idx_name", "columns": ["name"] }
+      ]
+    }
+  ]
+}

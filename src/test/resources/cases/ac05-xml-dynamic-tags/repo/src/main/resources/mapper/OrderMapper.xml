@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.OrderMapper">
+  <sql id="baseCols">id, name, create_time</sql>
+  <select id="search">SELECT <include refid="baseCols"/> FROM t_order WHERE name = #{n}</select>
+  <update id="updateIf">UPDATE t_order SET name = 'x' WHERE id = #{id}</update>
+  <select id="byIds">SELECT id FROM t_order WHERE id = #{id}</select>
+  <select id="byKeyword">SELECT id FROM t_order WHERE status = #{st}</select>
+</mapper>

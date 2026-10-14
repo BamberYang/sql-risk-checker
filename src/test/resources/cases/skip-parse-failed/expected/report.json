@@ -1,0 +1,53 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "f55f077a4c3d0f62cbf071a7f25c9a77e1414637",
+  "prodCommit": "0cdfa66c8e5f60da3ba9e894de7be6f68cd934d7",
+  "summary": {
+    "total": 1,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "skip": 2,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.S.ok",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/S.xml",
+      "line": 4,
+      "changeType": "ADDED",
+      "sql": "SELECT id, status FROM t_order WHERE id = #{id}",
+      "findings": [
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT id, status FROM t_order WHERE id = #{id}",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": [
+    {
+      "statementId": "com.demo.mapper.P.dynamic",
+      "file": "src/main/java/com/demo/mapper/P.java",
+      "line": 7,
+      "kind": "UNSUPPORTED_CARRIER",
+      "reason": "无法静态解析 Provider 方法"
+    },
+    {
+      "statementId": "com.demo.mapper.S.garbage",
+      "file": "src/main/resources/mapper/S.xml",
+      "line": 3,
+      "kind": "PARSE_FAILED",
+      "reason": "解析失败：SQL 解析失败：ERROR. pos 20, line 1, column 11, token WHERE"
+    }
+  ]
+}

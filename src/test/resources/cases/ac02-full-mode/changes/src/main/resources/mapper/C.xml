@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.C">
+  <delete id="d1">DELETE FROM t_order WHERE id = #{id}</delete>
+</mapper>

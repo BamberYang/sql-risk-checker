@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "tables": [
+    {
+      "table": "t_order",
+      "fields": [
+        { "name": "id", "type": "BIGINT" }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"] }
+      ]
+    }
+  ]
+}

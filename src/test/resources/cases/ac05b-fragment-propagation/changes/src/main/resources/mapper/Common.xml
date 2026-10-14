@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.Common">
+  <sql id="orderCols">id, status, updated_at</sql>
+</mapper>

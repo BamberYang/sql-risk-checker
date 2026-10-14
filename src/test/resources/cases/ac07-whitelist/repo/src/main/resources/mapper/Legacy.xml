@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.Legacy">
+  <select id="legacyA">SELECT id FROM t_order WHERE id = #{id}</select>
+  <update id="legacyB">UPDATE t_order SET status = #{s} WHERE id = #{id}</update>
+</mapper>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.OrderMapper">
+  <select id="findById">SELECT id FROM t_order WHERE id = #{id}</select>
+  <update id="touchAll">UPDATE t_order SET status = #{s} WHERE id = #{id}</update>
+  <delete id="removeTemp">DELETE FROM t_order WHERE id = #{id}</delete>
+</mapper>

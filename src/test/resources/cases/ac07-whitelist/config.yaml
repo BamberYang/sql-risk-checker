@@ -1,0 +1,4 @@
+whitelist:
+  statements:
+    - "com.demo.mapper.Legacy.*"
+    - "com.demo.mapper.OrderMapper.findByCode"

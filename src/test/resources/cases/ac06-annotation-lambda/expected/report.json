@@ -1,0 +1,73 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "101bebfb6ad186b241ab6f9e23fd49ff2a8bb4b5",
+  "prodCommit": "c75c5ba4d7abc83b47ee6f4674e7456a020546e2",
+  "summary": {
+    "total": 2,
+    "high": 0,
+    "medium": 0,
+    "low": 2,
+    "skip": 1,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.AnnoMapper.byStatus",
+      "source": "ANNOTATION",
+      "file": "src/main/java/com/demo/mapper/AnnoMapper.java",
+      "line": 7,
+      "changeType": "MODIFIED",
+      "sql": "SELECT id, status FROM t_order WHERE status = #{st}",
+      "findings": [
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT id, status FROM t_order WHERE status = #{st}",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "OrderService.java:11",
+      "source": "LAMBDA",
+      "file": "src/main/java/com/demo/service/OrderService.java",
+      "line": 11,
+      "changeType": "MODIFIED",
+      "sql": "SELECT * FROM t_order WHERE id = ? AND status IN (?) AND (amount = ? OR amount = ?) ORDER BY create_time DESC",
+      "findings": [
+        {
+          "ruleId": "L2",
+          "level": "LOW",
+          "message": "SELECT * 且已有过滤，建议显式列出字段",
+          "snippet": "SELECT * FROM t_order WHERE id = ? AND status IN (?) AND (amount = ? OR amount = ?) ORDER BY create_time DESC",
+          "skeleton": 0
+        },
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT * FROM t_order WHERE id = ? AND status IN (?) AND (amount = ? OR amount = ?) ORDER BY create_time DESC",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": [
+    {
+      "statementId": "com.demo.mapper.AnnoMapper.dynamic",
+      "file": "src/main/java/com/demo/mapper/AnnoMapper.java",
+      "line": 13,
+      "kind": "UNSUPPORTED_CARRIER",
+      "reason": "无法静态解析 Provider 方法"
+    }
+  ]
+}

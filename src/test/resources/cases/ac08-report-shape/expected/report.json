@@ -1,0 +1,53 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "bc2c44a754dc0900f36a0f6d2b51b3401b1e6ea9",
+  "prodCommit": "524a29862dbd8f24c008ccedf42c35f4b67fb80e",
+  "summary": {
+    "total": 1,
+    "high": 1,
+    "medium": 0,
+    "low": 0,
+    "skip": 1,
+    "ignored": 1
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.M.updateAll",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/M.xml",
+      "line": 3,
+      "changeType": "ADDED",
+      "sql": "UPDATE t_order SET flag = 1",
+      "findings": [
+        {
+          "ruleId": "H1",
+          "level": "HIGH",
+          "message": "UPDATE 语句缺少 WHERE，将全表更新，高危",
+          "snippet": "UPDATE t_order SET flag = 1",
+          "skeleton": 0
+        }
+      ],
+      "level": "HIGH",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [
+    {
+      "statementId": "com.demo.mapper.M.legacyOne",
+      "file": "src/main/resources/mapper/M.xml",
+      "line": 4,
+      "reason": "whitelist"
+    }
+  ],
+  "skipped": [
+    {
+      "statementId": "com.demo.mapper.M.broken",
+      "file": "src/main/resources/mapper/M.xml",
+      "line": 5,
+      "kind": "PARSE_FAILED",
+      "reason": "解析失败：SQL 解析失败：ERROR. pos 20, line 1, column 11, token WHERE"
+    }
+  ]
+}

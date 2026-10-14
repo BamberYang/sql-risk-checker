@@ -1,0 +1,72 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "a2f90ba8e4f8475f952a1d3f3d28f86bc6a5f9be",
+  "prodCommit": "14df2070c092646def7979f8e3d109f1b702e7b1",
+  "summary": {
+    "total": 2,
+    "high": 1,
+    "medium": 0,
+    "low": 1,
+    "skip": 0,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.ChooseMapper.latest",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/ChooseMapper.xml",
+      "line": 3,
+      "changeType": "ADDED",
+      "sql": "SELECT id FROM t_order ORDER BY id DESC",
+      "findings": [
+        {
+          "ruleId": "H3",
+          "level": "HIGH",
+          "message": "SELECT 无有效过滤条件（无 WHERE 且无 LIMIT），存在全表扫描风险",
+          "snippet": "SELECT id FROM t_order ORDER BY id DESC",
+          "skeleton": 1
+        }
+      ],
+      "level": "HIGH",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.ChooseMapper.filtered",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/ChooseMapper.xml",
+      "line": 4,
+      "changeType": "ADDED",
+      "sql": "SELECT * FROM t_order WHERE create_time = #{t}",
+      "findings": [
+        {
+          "ruleId": "L1",
+          "level": "LOW",
+          "message": "使用了不推荐写法：SELECT *",
+          "snippet": "SELECT * FROM t_order WHERE create_time = #{t}",
+          "skeleton": 0
+        },
+        {
+          "ruleId": "L2",
+          "level": "LOW",
+          "message": "SELECT * 且已有过滤，建议显式列出字段",
+          "snippet": "SELECT * FROM t_order WHERE create_time = #{t}",
+          "skeleton": 0
+        },
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT * FROM t_order WHERE create_time = #{t}",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": []
+}

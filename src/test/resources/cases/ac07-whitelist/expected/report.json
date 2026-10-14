@@ -1,0 +1,57 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "21b5aa901feccfe7eb571d958f62ebbd5aa72dc0",
+  "prodCommit": "570686eb2a4c8e7f0ab75717c4bf631eaae67757",
+  "summary": {
+    "total": 1,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "skip": 0,
+    "ignored": 3
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.OrderMapper.keepOne",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 4,
+      "changeType": "ADDED",
+      "sql": "SELECT id, code FROM t_order WHERE id = #{id}",
+      "findings": [
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT id, code FROM t_order WHERE id = #{id}",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [
+    {
+      "statementId": "com.demo.mapper.Legacy.legacyA",
+      "file": "src/main/resources/mapper/Legacy.xml",
+      "line": 3,
+      "reason": "whitelist"
+    },
+    {
+      "statementId": "com.demo.mapper.Legacy.legacyB",
+      "file": "src/main/resources/mapper/Legacy.xml",
+      "line": 4,
+      "reason": "whitelist"
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.findByCode",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 3,
+      "reason": "whitelist"
+    }
+  ],
+  "skipped": []
+}

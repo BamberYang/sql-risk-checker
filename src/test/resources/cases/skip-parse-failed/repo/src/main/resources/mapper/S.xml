@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.S">
+  <select id="garbage">SELECT id FROM t_order WHERE id = #{id}</select>
+  <select id="ok">SELECT id FROM t_order WHERE id = #{id}</select>
+</mapper>

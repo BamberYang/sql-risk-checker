@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.ChooseMapper">
+  <select id="latest">SELECT id FROM t_order ORDER BY id DESC <choose><when test="q != null">LIMIT 10</when></choose></select>
+  <select id="filtered">SELECT * FROM t_order <choose><when test="t != null">WHERE create_time = #{t}</when><otherwise></otherwise></choose></select>
+</mapper>
