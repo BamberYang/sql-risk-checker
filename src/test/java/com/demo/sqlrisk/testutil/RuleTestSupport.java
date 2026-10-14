@@ -59,6 +59,11 @@ public final class RuleTestSupport {
         return new RuleContext(null, meta(rawText), null, null, rawText);
     }
 
+    /** 语句级上下文 + Wrapper SQL 段根名（§9.5-6，M8 排除项测试用）。 */
+    public static RuleContext statementCtx(String rawText, List<String> wrapperSqlParams) {
+        return new RuleContext(null, meta(rawText), null, null, rawText, wrapperSqlParams);
+    }
+
     /** 经真实解析编排（StatementParser）生成语句（引擎测试用）。 */
     public static ParsedStatement parsedStatement(String sql) {
         ExtractedStatement statement = new ExtractedStatement("m.s", StatementSource.ANNOTATION,

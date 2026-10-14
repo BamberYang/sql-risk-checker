@@ -102,6 +102,14 @@ class SqlRiskCheckerMainTest {
         String reportJson = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         assertTrue(reportJson.contains("\"headCommit\": \"" + fixture.sha("head") + "\""), reportJson);
         assertTrue(reportJson.contains("\"prodCommit\": null"), "FULL 模式 prodCommit 键保留：" + reportJson);
+
+        // 交付后增补：HTML 阅读层默认双产出（§12.5）
+        Path htmlFile = outDir.resolve("sql_risk_report.html");
+        assertTrue(Files.exists(htmlFile), "HTML 报告应写入 output 目录");
+        assertTrue(outText().contains("sql_risk_report.html"), "控制台列出 HTML 报告路径");
+        String reportHtml = new String(Files.readAllBytes(htmlFile), StandardCharsets.UTF_8);
+        assertTrue(reportHtml.startsWith("<!DOCTYPE html>"), reportHtml.substring(0, Math.min(80, reportHtml.length())));
+        assertTrue(reportHtml.contains(abbrev(fixture.sha("head"))), "HTML 头部含 head commit 缩略");
     }
 
     @Test

@@ -3,6 +3,8 @@ package com.demo.sqlrisk.parser;
 import com.demo.sqlrisk.extractor.lambda.EntityIndex;
 import com.demo.sqlrisk.extractor.lambda.EntityMeta;
 import com.demo.sqlrisk.extractor.lambda.LambdaArg;
+import com.demo.sqlrisk.extractor.lambda.LambdaBranchGroup;
+import com.demo.sqlrisk.extractor.lambda.LambdaBranchRef;
 import com.demo.sqlrisk.extractor.lambda.LambdaCall;
 import com.demo.sqlrisk.extractor.lambda.LambdaChainModel;
 import com.demo.sqlrisk.util.TextUtils;
@@ -40,36 +42,152 @@ public final class LambdaSkeletonRenderer {
     private LambdaSkeletonRenderer() {
     }
 
+    /** 兼容入口：渲染首个骨架（无分支链 = 唯一骨架；分支链全量见 {@link #renderAll}）。 */
     public static SqlSkeleton render(LambdaChainModel chain, EntityIndex entityIndex) {
+        return renderAll(chain, entityIndex).get(0);
+    }
+
+    /**
+     * 全骨架渲染（详细设计 §10.3-补充，M15）：控制流分支组按 {@code <choose>} 语义枚举行路径组合
+     * ——if/else 与 switch/case 每个分支生成一个骨架，未选中分支的调用记 {@link DroppedBranch}
+     * （{@code RUNTIME_CONDITION}）；无 else 的 if / 循环体中的调用保守丢弃
+     * （{@code CONSERVATIVE_FALSE}，对齐 XML {@code <if>} 语义）。组合数超
+     * {@link DynamicEvaluator#MAX_SKELETONS} 截断（DD-4，骨架标记 truncated）。
+     */
+    public static List<SqlSkeleton> renderAll(LambdaChainModel chain, EntityIndex entityIndex) {
         EntityMeta entity = null;
         if (entityIndex != null && chain.entityTypeName() != null) {
             entity = entityIndex.entity(chain.entityTypeName()).orElse(null);
         }
         String table = entity != null ? entity.table() : "?"; // 实体解析失败 → 表名占位（D13）
 
-        PredicateBuilder where = new PredicateBuilder();
-        TopLevel top = new TopLevel();
-        applyCalls(chain.calls(), where, top, entity);
+        List<int[]> combos = combinations(chain.branchGroups());
+        boolean truncated = totalCombinations(chain.branchGroups()) > combos.size();
+        List<SqlSkeleton> out = new ArrayList<SqlSkeleton>(combos.size());
+        for (int[] combo : combos) {
+            PredicateBuilder where = new PredicateBuilder();
+            TopLevel top = new TopLevel();
+            applyCalls(filterCalls(chain, combo, where), where, top, entity);
+            out.add(new SqlSkeleton(buildSql(chain, table, where, top), where.dropped,
+                    strategyTag(chain.branchGroups(), combo), where.unknown, truncated,
+                    where.leadingWildcard, chain.incomplete()));
+        }
+        return out;
+    }
 
-        String sql;
+    private static String buildSql(LambdaChainModel chain, String table, PredicateBuilder where, TopLevel top) {
         if (chain.updateWrapper()) {
             if (top.setItems.isEmpty()) {
                 // 实体式 update(entity, wrapper)：SET 项来自实体、静态不可见 → 占位列保证可解析 + unknown（如实标注）
                 where.unknown = true;
                 top.setItems.add("update_placeholder = ?");
             }
-            sql = "UPDATE " + table + " SET " + String.join(", ", top.setItems)
-                    + (where.any ? " WHERE " + where.text : "")
-                    + top.suffixText();
-        } else {
-            String columns = top.selectColumns.isEmpty() ? "*" : String.join(", ", top.selectColumns);
-            sql = "SELECT " + columns + " FROM " + table
+            return "UPDATE " + table + " SET " + String.join(", ", top.setItems)
                     + (where.any ? " WHERE " + where.text : "")
                     + top.suffixText();
         }
+        String columns = top.selectColumns.isEmpty() ? "*" : String.join(", ", top.selectColumns);
+        return "SELECT " + columns + " FROM " + table
+                + (where.any ? " WHERE " + where.text : "")
+                + top.suffixText();
+    }
 
-        return new SqlSkeleton(sql, where.dropped, SqlSkeleton.TAG_BASE,
-                where.unknown, false, where.leadingWildcard, chain.incomplete());
+    // ---------- 分支枚举（§10.3-补充，M15） ----------
+
+    /** 路径组合枚举（索引 = 组全量 id；单路径组固定 0，其调用 pathIndex=-1 天然排除）。 */
+    private static List<int[]> combinations(List<LambdaBranchGroup> groups) {
+        List<int[]> out = new ArrayList<int[]>();
+        expand(groups, 0, new int[groups.size()], out);
+        if (out.isEmpty()) {
+            out.add(new int[groups.size()]);
+        }
+        return out;
+    }
+
+    private static void expand(List<LambdaBranchGroup> groups, int position, int[] combo, List<int[]> out) {
+        if (out.size() >= DynamicEvaluator.MAX_SKELETONS) {
+            return; // DD-4 截断
+        }
+        if (position == groups.size()) {
+            out.add(combo.clone());
+            return;
+        }
+        LambdaBranchGroup group = groups.get(position);
+        if (!group.enumerable()) {
+            expand(groups, position + 1, combo, out);
+            return;
+        }
+        for (int path = 0; path < group.pathLabels().size(); path++) {
+            combo[position] = path;
+            expand(groups, position + 1, combo, out);
+        }
+    }
+
+    private static int totalCombinations(List<LambdaBranchGroup> groups) {
+        int total = 1;
+        for (LambdaBranchGroup group : groups) {
+            if (group.enumerable()) {
+                total *= group.pathLabels().size();
+            }
+        }
+        return total;
+    }
+
+    /** 按组合过滤调用：未选中分支（含恒不成立分支）记 DroppedBranch。 */
+    private static List<LambdaCall> filterCalls(LambdaChainModel chain, int[] combo, PredicateBuilder where) {
+        List<LambdaCall> included = new ArrayList<LambdaCall>();
+        for (LambdaCall call : chain.calls()) {
+            LambdaBranchRef decidingRef = null;
+            boolean conservative = false;
+            for (LambdaBranchRef ref : call.branchPath()) {
+                boolean excluded = ref.pathIndex() < 0 || combo[ref.groupId()] != ref.pathIndex();
+                if (!excluded) {
+                    continue;
+                }
+                if (ref.pathIndex() < 0) {
+                    conservative = true;
+                }
+                if (decidingRef == null) {
+                    decidingRef = ref; // 最外层排除因（溯源用）
+                }
+            }
+            if (decidingRef == null) {
+                included.add(call);
+                continue;
+            }
+            where.dropped.add(new DroppedBranch(
+                    branchTypeOf(chain.branchGroups(), decidingRef),
+                    conservative ? DroppedBranch.Reason.CONSERVATIVE_FALSE
+                            : DroppedBranch.Reason.RUNTIME_CONDITION,
+                    roleOf(call), call.method() + "()"));
+        }
+        return included;
+    }
+
+    /** switch 默认条目 → OTHERWISE，其余 case 路径 → WHEN；if/循环 → IF（对齐 XML 分支类型）。 */
+    private static DroppedBranch.BranchType branchTypeOf(List<LambdaBranchGroup> groups, LambdaBranchRef ref) {
+        LambdaBranchGroup group = groups.get(ref.groupId());
+        if (group.kind() == LambdaBranchGroup.Kind.IF || ref.pathIndex() < 0) {
+            return DroppedBranch.BranchType.IF;
+        }
+        return group.pathLabels().get(ref.pathIndex()).startsWith("default")
+                ? DroppedBranch.BranchType.OTHERWISE : DroppedBranch.BranchType.WHEN;
+    }
+
+    private static DroppedBranch.Role roleOf(LambdaCall call) {
+        String method = call.method();
+        return "set".equals(method) || "setIncrBy".equals(method) || "setDecrBy".equals(method)
+                ? DroppedBranch.Role.SET : DroppedBranch.Role.CONDITION;
+    }
+
+    private static String strategyTag(List<LambdaBranchGroup> groups, int[] combo) {
+        List<String> parts = new ArrayList<String>();
+        for (LambdaBranchGroup group : groups) {
+            if (group.enumerable()) {
+                parts.add(group.pathLabels().get(combo[group.groupId()]));
+            }
+        }
+        return parts.isEmpty() ? SqlSkeleton.TAG_BASE : "branch:" + String.join(", ", parts);
     }
 
     // ---------- 归约 ----------

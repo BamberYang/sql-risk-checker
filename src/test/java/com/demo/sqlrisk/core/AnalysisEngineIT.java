@@ -55,6 +55,8 @@ class AnalysisEngineIT {
             "ac07-whitelist",
             "ac08-report-shape",
             "ac11-dollar-shortcircuit",
+            "ac12-annotation-wrapper",
+            "ac13-lambda-branches",
             "m1-metadata-semantics",
             "skip-parse-failed"));
 

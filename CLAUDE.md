@@ -33,13 +33,13 @@ java -jar target/sql-risk-checker-shaded.jar --repo <path> --prod-commit <sha> -
 改动前必须知道的硬约束（跨文档才能看全，容易被违背）：
 
 - **Java 8 语法基线**：禁用 var/record/switch 表达式/List.of 等新语法；模型类不可变、公共方法不返回 null（空集合 + Optional）。
-- **保守策略固定启用、无开关**：`<if>` 恒视为 FALSE；`<choose>` 生成 when/otherwise 两份骨架，任一骨架命中即停止后续解析与判定。
+- **保守策略固定启用、无开关**：`<if>` 恒视为 FALSE；`<choose>` 生成 when/otherwise 两份骨架，任一骨架命中即停止后续解析与判定；Lambda 侧同构——wrapper 变量在 if/else、switch/case 中追加条件按分支枚举骨架（对齐 `<choose>`），无 else 的 if / 循环体保守丢弃（对齐 `<if>`，详设 §9.7/§10.3）。
 - **数据源恒为提交树**：DIFF 与 FULL 两模式都只读已提交内容，工作区文件永不读取（D21/D22）。
 - **增量语义**：行级命中即提取完整语句；`<sql>` 片段改动经 `XmlFragmentIndex` 反向闭包传播到全部（含传递、跨文件）引用语句并记 `changedVia`（D20）；Lambda 语句范围含 wrapper 执行调用行。
 - **风险归类与退出码**：HIGH/MEDIUM/LOW + SKIP（解析失败等入 SKIP，不影响退出码）；退出码 0 无高危 / 1 有高危 / 2 参数或环境错误。
-- **规则集固定**：H1~H3、M1~M6、M8、L1/L2/L4；L3、M7 编号保留不复用。M8 为语句级短路规则（扫语句**原文**，含被丢弃分支，优先级 -100 先行）。规则优先级/短路标记硬编码，仅 level/enabled 可配置。
+- **规则集固定**：H1~H3、M1~M6、M8、L1/L2/L4；L3、M7 编号保留不复用。M8 为语句级短路规则（扫语句**原文**，含被丢弃分支，优先级 -100 先行），**排除根名解析到 Wrapper 参数的 `${…}`**（如 `${ew.customSqlSegment}`，详设 §9.5-6/§10.6）；**空骨架（含 `${}` 解析失败）未命中短路规则 → SKIP**（不输出为无风险结果，§11.2-④ v1.6）。规则优先级/短路标记硬编码，仅 level/enabled 可配置。
 - **范围边界**：普通 QueryWrapper（字符串列名链式）与 BaseMapper 内置方法不解析（D23）；链式方法表中未收录的方法 → 忽略该条件并标 `hasUnknownFragment`，不猜测语义（DD-8）。
-- **报告契约**：需求 §10.2 字段 + 追加字段（mode/source/uncertain/changedVia/skeleton、changeType:FULL，D5 已确认）；口径：total=results.length，提取总数=total+skip+ignored。
+- **报告契约**：需求 §10.2 字段 + 追加字段（mode/source/uncertain/changedVia/skeleton、changeType:FULL，D5 已确认）；口径：total=results.length，提取总数=total+skip+ignored。`--output` 默认双产出：JSON 为机器契约（黄金样例基准），HTML 为阅读层（§12.5，不参与黄金比对）。
 - **元数据为必需输入**：缺失（含默认路径仓库根 `sql-risk-metadata.json`）或格式错误 → exit 2；表不在元数据中 = 无索引（M1 保守命中）。
 
 模块依赖硬约束（概要设计 §3.3）：`cli → core → 其余`；`rule` 不得依赖 `diff`/`extractor`（规则只读 QueryFacts + 上下文）；`model` 零依赖。跨模块 SPI：`ProductionCommitProvider`（diff）、`MetadataProvider`（metadata）、`RuleProvider`（rule，ServiceLoader 扩展）。

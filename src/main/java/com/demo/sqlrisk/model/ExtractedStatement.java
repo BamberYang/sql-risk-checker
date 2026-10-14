@@ -1,5 +1,8 @@
 package com.demo.sqlrisk.model;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -18,7 +21,9 @@ public final class ExtractedStatement {
     private final String rawText;
     private final Object carrier;
     private final String changedVia; // nullable：片段（<sql>/<include>）派生命中时的来源片段 refid
+    private final List<String> wrapperSqlParams; // 注解 SQL 中解析到 Wrapper 家族参数的 ${} 根名（§9.5-6），空=无
 
+    /** 兼容构造：无 Wrapper SQL 段（mapper.xml / Lambda / 未解析出 Wrapper 参数）。 */
     public ExtractedStatement(String statementId,
                               StatementSource source,
                               ChangeType changeType,
@@ -27,6 +32,19 @@ public final class ExtractedStatement {
                               String rawText,
                               Object carrier,
                               String changedVia) {
+        this(statementId, source, changeType, file, line, rawText, carrier, changedVia,
+                Collections.<String>emptyList());
+    }
+
+    public ExtractedStatement(String statementId,
+                              StatementSource source,
+                              ChangeType changeType,
+                              String file,
+                              int line,
+                              String rawText,
+                              Object carrier,
+                              String changedVia,
+                              List<String> wrapperSqlParams) {
         this.statementId = Objects.requireNonNull(statementId, "statementId");
         this.source = Objects.requireNonNull(source, "source");
         this.changeType = Objects.requireNonNull(changeType, "changeType");
@@ -35,6 +53,8 @@ public final class ExtractedStatement {
         this.rawText = Objects.requireNonNull(rawText, "rawText");
         this.carrier = Objects.requireNonNull(carrier, "carrier");
         this.changedVia = changedVia;
+        this.wrapperSqlParams = Collections.unmodifiableList(new ArrayList<String>(
+                Objects.requireNonNull(wrapperSqlParams, "wrapperSqlParams")));
     }
 
     public String statementId() {
@@ -76,5 +96,17 @@ public final class ExtractedStatement {
     /** 是否为片段派生变更。 */
     public boolean isPropagated() {
         return changedVia != null;
+    }
+
+    /**
+     * 注解 SQL 中根名解析到 MyBatis-Plus Wrapper 家族参数的 {@code ${name…}} 占位符根名集合（§9.5-6）。
+     * 空列表 = 无此类占位符；供解析阶段代换（§10.6）与 M8 判定（§11.4）消费。
+     */
+    public List<String> wrapperSqlParams() {
+        return wrapperSqlParams;
+    }
+
+    public boolean hasWrapperSqlParams() {
+        return !wrapperSqlParams.isEmpty();
     }
 }

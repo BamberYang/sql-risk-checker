@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -109,5 +110,28 @@ class JsonMetadataProviderTest {
         TableMetadata table = JsonMetadataProvider.load(write(json)).find("t_order").get();
         assertTrue(table.field("a").isPresent());
         assertFalse(table.field("b").isPresent(), "重复表名取首条");
+    }
+
+    @Test
+    void shipped_example_metadata_file_loads_and_matches_ddl() {
+        // examples/sql-risk-metadata.example.json 为项目参考示例（源自真实 PolarDB/PostgreSQL DDL）：
+        // 守卫其始终可被加载且关键结构正确（表数、复合索引、唯一索引、ALTER 追加列）
+        JsonMetadataProvider provider = JsonMetadataProvider.load(
+                Paths.get("examples/sql-risk-metadata.example.json"));
+
+        assertTrue(provider.find("cash_order").isPresent(), "示例含 cash_order");
+        TableMetadata cashOrder = provider.find("cash_order").get();
+        assertEquals("numeric(19,2)", cashOrder.field("loan_amount").get().type());
+        assertTrue(cashOrder.hasIndexStartingWith("uid"), "ALTER 后补索引 idx_cash_order_uid 已收录");
+
+        TableMetadata productConfig = provider.find("product_config").get();
+        assertTrue(productConfig.hasIndexStartingWith("product_id"), "唯一索引 uk_product_id 已收录");
+        assertTrue(productConfig.field("face_quality_threshold").isPresent(), "ALTER 追加列已合并");
+
+        TableMetadata cityCode = provider.find("city_code").get();
+        assertTrue(cityCode.hasIndexStartingWith("province"), "复合索引 idx_province_city 前缀列为 province");
+        assertFalse(cityCode.hasIndexStartingWith("city"), "第二列不构成前缀命中（前缀语义，详设 §7）");
+
+        assertTrue(provider.find("event_process_record").isPresent(), "示例完整覆盖 9 张表（末表可加载）");
     }
 }

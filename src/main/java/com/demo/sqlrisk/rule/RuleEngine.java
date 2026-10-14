@@ -4,6 +4,7 @@ import com.demo.sqlrisk.config.AppConfig;
 import com.demo.sqlrisk.metadata.MetadataProvider;
 import com.demo.sqlrisk.model.Finding;
 import com.demo.sqlrisk.model.RiskLevel;
+import com.demo.sqlrisk.model.SkippedItem;
 import com.demo.sqlrisk.model.StatementMeta;
 import com.demo.sqlrisk.model.StatementResult;
 import com.demo.sqlrisk.parser.ParsedSql;
@@ -22,6 +23,8 @@ import java.util.List;
  *       不再评估任何骨架与规则——含 ${} 的"空骨架短路候选"亦由此覆盖（§8.5 结构性保证）；</li>
  *   <li><b>② 骨架循环</b>：按生成顺序逐骨架评估；任一骨架命中 ≥1 条 → 记录并停止，不再评估后续骨架（AC-4）；</li>
  *   <li><b>③ 归类</b>：语句级别 = 命中规则最高级别（配置覆盖后的生效级别）；无命中 → level=null；</li>
+ *   <li><b>④ 空骨架归口</b>（v1.6）：解析产物为空（含 ${} 解析失败的短路候选）且 ① 未命中 →
+ *       计入 {@link Outcome#skipped()}（PARSE_FAILED），不再作为 level=null 结果输出；</li>
  *   <li>防御式：单规则异常 → stderr 警告 + 跳过该规则，不中断整体。</li>
  * </ol>
  */
@@ -30,14 +33,43 @@ public final class RuleEngine {
     private RuleEngine() {
     }
 
-    public static List<StatementResult> run(List<ParsedStatement> statements, RuleRegistry registry,
-                                            MetadataProvider metadata, AppConfig config) {
+    /** 规则阶段产物：分析结果 + 空骨架（无法分析）转入的 SKIP。 */
+    public static final class Outcome {
+
+        private final List<StatementResult> results;
+        private final List<SkippedItem> skipped;
+
+        Outcome(List<StatementResult> results, List<SkippedItem> skipped) {
+            this.results = Collections.unmodifiableList(new ArrayList<StatementResult>(results));
+            this.skipped = Collections.unmodifiableList(new ArrayList<SkippedItem>(skipped));
+        }
+
+        public List<StatementResult> results() {
+            return results;
+        }
+
+        public List<SkippedItem> skipped() {
+            return skipped;
+        }
+    }
+
+    public static Outcome run(List<ParsedStatement> statements, RuleRegistry registry,
+                              MetadataProvider metadata, AppConfig config) {
         List<Rule> rules = registry.enabledRules();
         List<StatementResult> results = new ArrayList<StatementResult>(statements.size());
+        List<SkippedItem> skipped = new ArrayList<SkippedItem>();
         for (ParsedStatement statement : statements) {
-            results.add(analyze(statement, rules, registry, metadata, config));
+            StatementResult result = analyze(statement, rules, registry, metadata, config);
+            if (statement.parsed().isEmpty() && !result.hasFindings()) {
+                // ④ 空骨架归口（v1.6）：无法生成可用骨架且语句级短路未命中 → SKIP（"无法分析" ≠ "无风险"）
+                skipped.add(new SkippedItem(statement.source().statementId(), statement.source().file(),
+                        statement.source().line(), SkippedItem.Kind.PARSE_FAILED,
+                        "解析失败：无可用 SQL 骨架（含 ${} 且未命中短路规则）"));
+                continue;
+            }
+            results.add(result);
         }
-        return results;
+        return new Outcome(results, skipped);
     }
 
     private static StatementResult analyze(ParsedStatement statement, List<Rule> rules,
@@ -46,8 +78,9 @@ public final class RuleEngine {
         StatementMeta meta = StatementMeta.from(statement.source());
         String rawText = statement.source().rawText();
 
-        // ① 语句级短路（仅依赖语句原文）
-        RuleContext statementCtx = new RuleContext(null, meta, metadata, config, rawText);
+        // ① 语句级短路（仅依赖语句原文；wrapperSqlParams 供 M8 排除 Wrapper 运行期条件段，§9.5-6）
+        RuleContext statementCtx = new RuleContext(null, meta, metadata, config, rawText,
+                meta.wrapperSqlParams());
         for (Rule rule : rules) {
             if (!rule.shortCircuit()) {
                 continue;
@@ -63,7 +96,8 @@ public final class RuleEngine {
         List<ParsedSql> skeletons = statement.parsed();
         for (int i = 0; i < skeletons.size(); i++) {
             ParsedSql parsedSql = skeletons.get(i);
-            RuleContext ctx = new RuleContext(parsedSql, meta, metadata, config, rawText);
+            RuleContext ctx = new RuleContext(parsedSql, meta, metadata, config, rawText,
+                    meta.wrapperSqlParams());
             List<Finding> findings = new ArrayList<Finding>();
             for (Rule rule : rules) {
                 if (rule.shortCircuit()) {
@@ -77,7 +111,7 @@ public final class RuleEngine {
             }
         }
 
-        // ③ 无命中：sql 取骨架 #0（空骨架短路候选 → 语句原文）
+        // ③ 无命中：sql 取骨架 #0（空骨架仅防御性回退，生产路径已在 run ④ 归口 SKIP，v1.6）
         String sql = skeletons.isEmpty() ? TextUtils.collapseWhitespace(rawText)
                 : skeletons.get(0).skeleton().text();
         return new StatementResult(meta, sql, Collections.<Finding>emptyList(), null, statement.isUncertain());

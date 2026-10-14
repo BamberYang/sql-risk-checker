@@ -12,6 +12,7 @@ import com.demo.sqlrisk.util.JavaSourceIndex;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -205,5 +206,131 @@ class LambdaSqlExtractorTest {
             }
         }
         throw new AssertionError("缺少行 " + line);
+    }
+
+    // ---------- 控制流分支识别（§9.7-补充，M15） ----------
+
+    private static final String BRANCH_PATH = "src/main/java/demo/BranchService.java";
+    private static final String BRANCH_SERVICE =
+            "package demo;\n"                                                        // 1
+                    + "\n"
+                    + "class BranchService {\n"                                          // 3
+                    + "    private OrderMapper orderMapper;\n"
+                    + "\n"
+                    + "    Object run(long id, int type) {\n"
+                    + "        LambdaQueryWrapper<Order> w = new LambdaQueryWrapper<>();\n"
+                    + "        w.eq(Order::getId, id);\n"
+                    + "        if (type == 1) {\n"
+                    + "            w.eq(Order::getStatus, 1);\n"
+                    + "        } else {\n"
+                    + "            w.gt(Order::getOrderNo, \"A\");\n"                     // if/else 组
+                    + "        }\n"
+                    + "        switch (type) {\n"
+                    + "            case 2:\n"
+                    + "                w.lt(Order::getOrderNo, \"Z\");\n"
+                    + "                break;\n"
+                    + "            default:\n"
+                    + "                break;\n"                                        // switch 组
+                    + "        }\n"
+                    + "        if (type == 3) {\n"
+                    + "            w.isNull(Order::getUserId);\n"                        // 无 else：保守丢弃
+                    + "        }\n"
+                    + "        for (int i = 0; i < 2; i++) {\n"
+                    + "            w.ne(Order::getUserId, i);\n"                         // 循环体：保守丢弃
+                    + "        }\n"
+                    + "        return orderMapper.selectList(w);\n"
+                    + "    }\n"
+                    + "}\n";
+
+    private static LambdaChainModel branchModel() {
+        Map<String, String> sources = new LinkedHashMap<String, String>();
+        sources.put(BRANCH_PATH, BRANCH_SERVICE);
+        sources.put(MAPPER_PATH, MAPPER);
+        sources.put(ENTITY_PATH, ENTITY);
+        JavaSourceIndex sourceIndex = JavaSourceIndex.build(sources);
+        ExtractContext ctx = new ExtractContext(null, EntityIndex.build(sourceIndex), sourceIndex, null);
+        ExtractResult result = new LambdaSqlExtractor().extract(CandidateFile.of(BRANCH_PATH, BRANCH_SERVICE), ctx);
+        assertEquals(1, result.statements().size());
+        return (LambdaChainModel) result.statements().get(0).carrier();
+    }
+
+    private static LambdaCall callWithAccessor(LambdaChainModel model, String method, String accessor) {
+        for (LambdaCall call : model.calls()) {
+            if (call.method().equals(method) && !call.args().isEmpty()
+                    && accessor.equals(call.args().get(0).text())) {
+                return call;
+            }
+        }
+        throw new AssertionError("缺少调用 " + method + "(" + accessor + ")");
+    }
+
+    @Test
+    void control_flow_branches_recorded_as_groups_and_paths() {
+        LambdaChainModel model = branchModel();
+
+        assertEquals(4, model.branchGroups().size(), "if/else、switch、无 else 的 if、循环 各一组");
+        LambdaBranchGroup ifElse = model.branchGroups().get(0);
+        assertEquals(LambdaBranchGroup.Kind.IF, ifElse.kind());
+        assertEquals(Arrays.asList("if-then", "if-else"), ifElse.pathLabels());
+
+        LambdaBranchGroup switchGroup = model.branchGroups().get(1);
+        assertEquals(LambdaBranchGroup.Kind.SWITCH, switchGroup.kind());
+        assertEquals(Arrays.asList("case 2", "default"), switchGroup.pathLabels(), "default 条目独立成路径");
+
+        assertTrue(callWithAccessor(model, "eq", "getId").branchPath().isEmpty(), "无条件调用无分支坐标");
+
+        LambdaCall thenCall = callWithAccessor(model, "eq", "getStatus");
+        assertEquals(1, thenCall.branchPath().size());
+        assertEquals(0, thenCall.branchPath().get(0).groupId());
+        assertEquals(0, thenCall.branchPath().get(0).pathIndex(), "then 分支 = 路径 0");
+
+        LambdaCall elseCall = callWithAccessor(model, "gt", "getOrderNo");
+        assertEquals(1, elseCall.branchPath().get(0).pathIndex(), "else 分支 = 路径 1");
+
+        LambdaCall caseCall = callWithAccessor(model, "lt", "getOrderNo");
+        assertEquals(1, caseCall.branchPath().get(0).groupId());
+        assertEquals(0, caseCall.branchPath().get(0).pathIndex(), "case 2 = 路径 0");
+
+        LambdaCall skipCall = callWithAccessor(model, "isNull", "getUserId");
+        assertEquals(LambdaBranchRef.NEVER_TAKEN, skipCall.branchPath().get(0).pathIndex(),
+                "无 else 的 if：恒不成立（保守丢弃）");
+        assertEquals(Collections.singletonList("if-skip"), model.branchGroups().get(2).pathLabels());
+
+        LambdaCall loopCall = callWithAccessor(model, "ne", "getUserId");
+        assertEquals(LambdaBranchRef.NEVER_TAKEN, loopCall.branchPath().get(0).pathIndex(),
+                "循环体：可能不执行（保守丢弃）");
+    }
+
+    @Test
+    void branch_change_line_still_hits_statement_range() {
+        // 变更行位于 if 分支体内部 → 语句整体（rootLine..rangeEndLine）仍被提取（D20/DD-7）
+        int elseLine = lineOfIn(BRANCH_SERVICE, "w.gt(Order::getOrderNo");
+        Map<String, String> sources = new LinkedHashMap<String, String>();
+        sources.put(BRANCH_PATH, BRANCH_SERVICE);
+        sources.put(MAPPER_PATH, MAPPER);
+        sources.put(ENTITY_PATH, ENTITY);
+        JavaSourceIndex sourceIndex = JavaSourceIndex.build(sources);
+        ExtractContext ctx = new ExtractContext(null, EntityIndex.build(sourceIndex), sourceIndex, null);
+        TreeSet<Integer> added = new TreeSet<Integer>();
+        added.add(elseLine);
+        FileChange change = new FileChange(BRANCH_PATH, DiffType.MODIFY,
+                Collections.singletonList(new Hunk(0, 0, elseLine, 0, added,
+                        new TreeSet<Integer>())));
+        ExtractResult result = new LambdaSqlExtractor().extract(
+                CandidateFile.of(BRANCH_PATH, BRANCH_SERVICE, DiffType.MODIFY, change), ctx);
+        assertEquals(1, result.statements().size(), "分支体内行变更 → 整句提取");
+        assertEquals(ChangeType.MODIFIED, result.statements().get(0).changeType());
+    }
+
+    private static int lineOfIn(String content, String needle) {
+        int index = content.indexOf(needle);
+        assertTrue(index >= 0, "内容中缺少: " + needle);
+        int line = 1;
+        for (int i = 0; i < index; i++) {
+            if (content.charAt(i) == '\n') {
+                line++;
+            }
+        }
+        return line;
     }
 }

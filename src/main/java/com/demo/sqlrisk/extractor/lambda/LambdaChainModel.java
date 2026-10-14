@@ -20,9 +20,17 @@ public final class LambdaChainModel {
     private final List<LambdaCall> calls;
     private final boolean incomplete;
     private final boolean updateWrapper;
+    private final List<LambdaBranchGroup> branchGroups; // 控制流分支组（M15）；无分支为空
 
     public LambdaChainModel(String file, int rootLine, int rangeEndLine, String entityTypeName,
                             List<LambdaCall> calls, boolean incomplete, boolean updateWrapper) {
+        this(file, rootLine, rangeEndLine, entityTypeName, calls, incomplete, updateWrapper,
+                Collections.<LambdaBranchGroup>emptyList());
+    }
+
+    public LambdaChainModel(String file, int rootLine, int rangeEndLine, String entityTypeName,
+                            List<LambdaCall> calls, boolean incomplete, boolean updateWrapper,
+                            List<LambdaBranchGroup> branchGroups) {
         this.file = Objects.requireNonNull(file, "file");
         this.rootLine = rootLine;
         this.rangeEndLine = rangeEndLine;
@@ -30,6 +38,8 @@ public final class LambdaChainModel {
         this.calls = Collections.unmodifiableList(new ArrayList<LambdaCall>(calls));
         this.incomplete = incomplete;
         this.updateWrapper = updateWrapper;
+        this.branchGroups = Collections.unmodifiableList(new ArrayList<LambdaBranchGroup>(
+                Objects.requireNonNull(branchGroups, "branchGroups")));
     }
 
     public String file() {
@@ -55,6 +65,11 @@ public final class LambdaChainModel {
 
     public boolean incomplete() {
         return incomplete;
+    }
+
+    /** 控制流分支组（§9.7-补充，M15）；无分支为空列表。 */
+    public List<LambdaBranchGroup> branchGroups() {
+        return branchGroups;
     }
 
     /** true = LambdaUpdateWrapper/lambdaUpdate（渲染为 UPDATE）；false = 查询链。 */

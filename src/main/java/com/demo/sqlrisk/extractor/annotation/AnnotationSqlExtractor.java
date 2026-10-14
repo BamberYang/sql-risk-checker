@@ -108,8 +108,13 @@ public final class AnnotationSqlExtractor implements SqlSourceExtractor {
                 Object carrier = isScript(sqlText)
                         ? new DynamicXmlText(sqlText, typeFqn)
                         : new AnnotationSqlText(sqlText);
+                // Wrapper SQL 段识别（§9.5-6，v1.4）：纯文本注解中 ${ew.customSqlSegment} 类占位符
+                // 根名解析到 Wrapper 家族参数 → 记录，供解析代换（§10.6）与 M8 排除（§11.4）
+                List<String> wrapperSqlParams = carrier instanceof AnnotationSqlText
+                        ? WrapperParamResolver.resolve(method)
+                        : Collections.<String>emptyList();
                 statements.add(new ExtractedStatement(statementId, StatementSource.ANNOTATION,
-                        change.get(), file.path(), line, sqlText, carrier, null));
+                        change.get(), file.path(), line, sqlText, carrier, null, wrapperSqlParams));
             }
         }
         return new ExtractResult(statements, skipped);

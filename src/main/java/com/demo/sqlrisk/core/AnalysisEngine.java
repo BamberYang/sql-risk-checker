@@ -143,11 +143,17 @@ public final class AnalysisEngine {
                 logParsing(parsedStatements, skeletonCount, parseFailures);
             }
 
-            // P7 规则执行（M7）：语句级短路（M8）→ 骨架循环首命中即停 → 归类
+            // P7 规则执行（M7）：语句级短路（M8）→ 骨架循环首命中即停 → 归类；
+            // 空骨架未命中短路规则 → SKIP（v1.6，§11.2-④）
             RuleRegistry ruleRegistry = RuleRegistry.create(ctx.config());
-            List<StatementResult> results = RuleEngine.run(parsedStatements, ruleRegistry, metadata, ctx.config());
+            RuleEngine.Outcome ruleOutcome = RuleEngine.run(parsedStatements, ruleRegistry, metadata, ctx.config());
+            List<StatementResult> results = ruleOutcome.results();
+            if (!ruleOutcome.skipped().isEmpty()) {
+                skipped.addAll(ruleOutcome.skipped());
+            }
             if (ctx.verbose()) {
                 logRules(results);
+                logEmptySkeletonSkips(ruleOutcome.skipped());
             }
 
             // P8 汇总（口径 §13.4）：按语句最高命中级别互斥归类；skip 含解析失败；ignored 为白名单
@@ -221,6 +227,14 @@ public final class AnalysisEngine {
         }
         for (SkippedItem failure : failures) {
             System.err.println("[解析] SKIP " + failure.statementId() + "  原因: " + failure.reason());
+        }
+    }
+
+    /** --verbose 的空骨架归口提示（v1.6）：仅命中时输出。 */
+    private static void logEmptySkeletonSkips(List<SkippedItem> skipped) {
+        for (SkippedItem item : skipped) {
+            System.err.println("[规则] SKIP " + item.statementId() + "  " + item.file() + ":" + item.line()
+                    + "  原因: " + item.reason());
         }
     }
 

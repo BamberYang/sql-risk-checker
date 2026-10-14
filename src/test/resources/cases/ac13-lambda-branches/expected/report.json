@@ -1,0 +1,65 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "aaae611372dc66913851223fe1ce845ff071a6a5",
+  "prodCommit": "801f2da4f40602c7edb729700b770ec041db9325",
+  "summary": {
+    "total": 2,
+    "high": 1,
+    "medium": 0,
+    "low": 1,
+    "skip": 0,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "BranchService.java:15",
+      "source": "LAMBDA",
+      "file": "src/main/java/com/demo/service/BranchService.java",
+      "line": 15,
+      "changeType": "MODIFIED",
+      "sql": "SELECT * FROM t_order WHERE id = ? AND amount = ?",
+      "findings": [
+        {
+          "ruleId": "L2",
+          "level": "LOW",
+          "message": "SELECT * 且已有过滤，建议显式列出字段",
+          "snippet": "SELECT * FROM t_order WHERE id = ? AND amount = ?",
+          "skeleton": 0
+        },
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT * FROM t_order WHERE id = ? AND amount = ?",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "BranchService.java:26",
+      "source": "LAMBDA",
+      "file": "src/main/java/com/demo/service/BranchService.java",
+      "line": 26,
+      "changeType": "MODIFIED",
+      "sql": "UPDATE t_order SET status = ?",
+      "findings": [
+        {
+          "ruleId": "H1",
+          "level": "HIGH",
+          "message": "UPDATE 语句缺少 WHERE，将全表更新，高危（WHERE 条件位于动态分支内，按保守策略视为不成立）",
+          "snippet": "UPDATE t_order SET status = ?",
+          "skeleton": 1
+        }
+      ],
+      "level": "HIGH",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": []
+}

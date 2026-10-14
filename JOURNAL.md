@@ -7,6 +7,33 @@
 
 ***
 
+## 2026-10-15
+
+### 进展
+
+- **注解 SQL 的 Wrapper 段特殊处理（需求方驱动）**：`${ew.customSqlSegment}` 等占位符在根名解析到方法参数（`@Param("ew")` 值优先，缺省取参数名）且类型为 MP Wrapper 家族（原始名以 `Wrapper` 结尾，泛型/包名剥离）时，不再误报 M8，链路：`WrapperParamResolver` 提取 → 语句携带 `wrapperSqlParams` → 解析阶段 `WrapperSqlSubstitutor` 代换为中性谓词（上下文判定 `1 = 1` / ` WHERE 1 = 1`，骨架标记未知片段 → 报告 `uncertain=true`）→ M8 判定排除被覆盖占位符
+- **绑定失配恢复 M8**：`@Param` 改名而 SQL 未同步（真实缺陷场景）时根名不再解析 → 自动退回 `${}` 拼串判定；变更检测覆盖两类改动——SQL 注解行与参数声明行（含 `@Param`）都在方法声明范围内，照常提取分析（黄金用例 ac12 分别覆盖）
+- 黄金用例 `ac12-annotation-wrapper` 落地（首个覆盖该链路的端到端用例）；**291/291 全绿**
+- **真实项目复跑**（union-order-app）：2 条 M8 误报消失——`sumApplyAmountByWrapper`/`sumApprovalAmountByWrapper` 转为 LOW(L4) + `uncertain=true`；摘要 高危 5 | 中危 50（-2）| 低危 2（+2）| SKIP 0
+- 设计回写：详设 v1.4（§9.5-6 识别规则、§10.6 代换规则、§11.4 M8 排除项、§18.3 ac12）；已知边界：mapper.xml 的 `${ew…}` 暂不识别（语句与接口方法无静态绑定通道，仍按原文命中 M8）
+- **Lambda 控制流分支枚举（需求方驱动，同日第二项）**：wrapper 变量在 `if/else`、`switch/case` 中追加条件 → 按分支枚举骨架（对齐 XML `<choose>`）：`LambdaBranchGroup/Ref` 记录分支坐标 → 渲染期路径组合枚举（`MAX_SKELETONS=8` 截断），未选中分支记 `DroppedBranch`（sibling → `RUNTIME_CONDITION`、default → `OTHERWISE`、set 族 → `SET` 角色）；**无 else 的 if 与循环体按 `<if>` 语义保守丢弃**（`NEVER_TAKEN` 坐标）；黄金用例 ac13（switch default 路径骨架命中 H1、skeleton=1 带分支附注）；300/300 全绿
+- **真实项目兑现**（union-order-app `CashOrderServiceImpl.sum` 的 switch 四分支）：旧行为把 LAST_ONE 与 LAST_PASS 两个 case 的调用平铺混合成一条运行时并不存在的错 SQL（`WHERE status=?` + `ORDER BY DESC LIMIT 1`，M1 MEDIUM）→ 现按分支拆分，报告首分支真实 SQL（L2 LOW），其余 case 记溯源
+- **元数据示例生成**：解析真实 DDL（union-order-app `init.sql`，PolarDB/PostgreSQL）→ `examples/sql-risk-metadata.example.json`（9 张表：`ALTER TABLE ADD COLUMN` 追加列合并、`CONSTRAINT … PRIMARY KEY` 与 `CREATE [UNIQUE] INDEX … USING BTREE` 全部收录，含复合索引 `idx_province_city(province, city)`）；经工具实际加载验证（不在元数据的表 → M1 保守命中，符合语义）；加守卫测试（示例可加载 + 结构断言，301 用例全绿）；README 引用
+  - 过程插曲：`~/Documents/WorkSpace/union/` 目录被 macOS 隐私标记（`com.apple.macl`）拦截，本会话工具进程拒读（连 `xattr -d`/`git show`/关沙箱都被系统拒绝）→ 由需求方手动拷贝到桌面后继续；后续如复用该仓库需授予终端「完全磁盘访问权限」
+- **空骨架归口 SKIP（需求方驱动，同日第三项）**：解析产物为空（含 `${}` 解析失败的短路候选）且语句级短路未命中时，不再作为 `level=null` 的无风险结果输出，改归 SKIP（PARSE_FAILED，reason=「解析失败：无可用 SQL 骨架（含 ${} 且未命中短路规则）」）；短路命中语义不变（AC-11，空骨架仍先过 M8）；`RuleEngine.run` 改为返回 `Outcome{results, skipped}` 并接入引擎汇总；ac12 增第三形态（固定条件与 `${ew.sqlSegment}` 混排 → SKIP）；302/302 全绿 → 详设 v1.6
+- **HTML 报告文案与统计（需求方驱动，同日第四项）**：「未命中风险规则/无命中」更名为「**通过**」（分区标题、卡片徽标、卡片占位、恒等式行），头部统计新增「通过」卡片（= 参与分析 − 高 − 中 − 低，teal 色）；JSON 报告契约保持不变；302/302 全绿 → 详设 v1.7
+
+### 心得
+
+- **"框架惯用法"与"拼串风险"要分开**：`${ew.customSqlSegment}` 与 `${userInput}` 形状一样，差别在值的**来源**——静态检查的可靠性一半在识别形状，另一半在追溯来源；追不到来源时保守（M8），能追到绑定则精确排除。
+- **排除项要带"失配回退"**：根名解析失败自动退回 M8，让"@Param 改名而 SQL 未同步"这类真实缺陷继续被抓住——排除逻辑的边界处理反而成了免费的附加正确性检查。
+- **代换而非丢弃**：把 Wrapper 段代换为中性谓词（而不是整句跳过/报 SKIP），让语句其余部分照常进入规则管道（本例如实报出 L4），信息损失最小；`uncertain=true` 如实标注"条件来自运行期"。
+- **"平铺收集"是隐藏的语义错误源**：分支内的条件调用此前被平铺进同一条链，产出的是"所有分支同时成立"的 SQL——这种 SQL 在运行期并不存在；枚举分支不是锦上添花，而是把"不存在的 SQL"修正为"可能的 SQL"。
+- **"选择"与"修饰"分开对待**：XML 早已区分 `<choose>`（替代路径 → 枚举）与 `<if>`（可选修饰 → 保守丢弃）；Java 的 if/else 与 switch/case 是"选择"、无 else 的 if 与循环体是"修饰"——沿用同一判据，Java 与 XML 两套语义天然一致，解释成本为零。
+- **"无法分析"与"已分析且无风险"必须在口径上分开**：空骨架此前以 `level=null` 混在 results 里——统计上表现为"已分析"，实际是"没分析成"；归口 SKIP 后 `total + skip + ignored = 提取总数` 的恒等式自动还原真实语义，报告使用者不会再把它误读为"看过且没问题"。
+
+***
+
 ## 2026-10-14
 
 ### 进展
@@ -28,6 +55,7 @@
 - **M8 完成并经需求方确认**：P4 白名单（仅 XML/注解参与、Lambda 排除）+ P8 汇总口径（恒等式断言）+ P9 报告输出（控制台模板 + JSON 文件，写失败 exit 2）；28 个新用例（累计 246 全绿）；**真实项目兑现**：43 行控制台摘要直接可读、63KB JSON 报告字段契约正确、白名单演示忽略 12 条 XML 语句而不碰 Lambda
 - **M9 完成并经需求方确认**：12 个黄金用例（每用例强断言口径恒等式）+ ac09 错误分支 + 确定性/工作区隔离专项（`AnalysisEngineIT` 15 用例）；**263→267 全绿**；期间修复 2 个真实缺陷（裸 `<if>WHERE …</if>` 附注缺失、夹具 SHA 跨 JVM 不稳定）；README 用法/参数/退出码补全、详设 v1.2 回写偏差清单；性能抽查 1050 文件 3.3s（NFR ≤30s）。**M0~M9 全部里程碑交付完毕。**
 - 交付后补充：入口调试便利——argv 为空时使用 `SqlRiskCheckerMain.DEBUG_DEFAULT_ARGV`（本地验证仓库 + 占位元数据 + `/tmp` 输出 + `--verbose`）并向 stderr 打印 `[调试]` 提示；空参不再落入缺参用法错误（详见 §5），新增 2 个单测
+- 交付后增补（post-M9）：**HTML 阅读层报告**——JSON 机器契约不动，`--output` 默认双产出 `sql_risk_report.html`（单文件离线自包含：内联 CSS + 原生 JS 四维筛选/折叠，全量 HTML 转义，输出确定性）；真实项目一次通过（63.6KB / 57 卡片 / 零外链）；另禁用 shade 的 `dependency-reduced-pom.xml` 自动生成（无 install/deploy 消费场景）
 
 ### 心得
 

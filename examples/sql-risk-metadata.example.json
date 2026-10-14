@@ -1,0 +1,955 @@
+{
+  "version": "1.0",
+  "tables": [
+    {
+      "table": "product_config",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int8"
+        },
+        {
+          "name": "quota_type",
+          "type": "int4"
+        },
+        {
+          "name": "support_check_credit",
+          "type": "int2"
+        },
+        {
+          "name": "check_credit_institutions",
+          "type": "varchar"
+        },
+        {
+          "name": "support_manual_audit",
+          "type": "int2"
+        },
+        {
+          "name": "manual_audit_nodes",
+          "type": "varchar(200)"
+        },
+        {
+          "name": "manual_audit_exp_id",
+          "type": "int2"
+        },
+        {
+          "name": "manual_review_rules",
+          "type": "varchar"
+        },
+        {
+          "name": "need_agreement",
+          "type": "int2"
+        },
+        {
+          "name": "signing_scenario",
+          "type": "varchar(64)"
+        },
+        {
+          "name": "grant_credit_integrated",
+          "type": "int2"
+        },
+        {
+          "name": "fund_code",
+          "type": "varchar(64)"
+        },
+        {
+          "name": "status",
+          "type": "varchar(64)"
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "create_by",
+          "type": "varchar(64)"
+        },
+        {
+          "name": "update_by",
+          "type": "varchar(64)"
+        },
+        {
+          "name": "deleted",
+          "type": "int2"
+        },
+        {
+          "name": "remark",
+          "type": "varchar"
+        },
+        {
+          "name": "allow_postpose_images",
+          "type": "int2"
+        },
+        {
+          "name": "product_name",
+          "type": "varchar(512)"
+        },
+        {
+          "name": "product_id",
+          "type": "varchar(256)"
+        },
+        {
+          "name": "product_type",
+          "type": "int4"
+        },
+        {
+          "name": "supplier_exp_id",
+          "type": "int8"
+        },
+        {
+          "name": "business_type",
+          "type": "varchar(16)"
+        },
+        {
+          "name": "check_image",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "face_quality_threshold",
+          "type": "varchar(32)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "uk_product_id",
+          "columns": [
+            "product_id"
+          ]
+        }
+      ]
+    },
+    {
+      "table": "original_order",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int8"
+        },
+        {
+          "name": "channel",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "order_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "external_order_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "external_user_id",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "business_type",
+          "type": "varchar(64)"
+        },
+        {
+          "name": "business_data",
+          "type": "varchar"
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "deleted",
+          "type": "int2"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_original_order_external_order_no",
+          "columns": [
+            "external_order_no"
+          ]
+        },
+        {
+          "name": "idx_original_order_order_no",
+          "columns": [
+            "order_no"
+          ]
+        },
+        {
+          "name": "idx_original_order_create_time",
+          "columns": [
+            "create_time"
+          ]
+        },
+        {
+          "name": "idx_original_order_update_time",
+          "columns": [
+            "update_time"
+          ]
+        }
+      ]
+    },
+    {
+      "table": "credit_order",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int8"
+        },
+        {
+          "name": "channel",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "credit_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "external_credit_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "external_user_id",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "member_id",
+          "type": "int8"
+        },
+        {
+          "name": "uid",
+          "type": "int8"
+        },
+        {
+          "name": "id_card_number",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "real_name",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "phone",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "quota_type",
+          "type": "int4"
+        },
+        {
+          "name": "flow_id",
+          "type": "int4"
+        },
+        {
+          "name": "submit_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "status",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "credit_amount",
+          "type": "numeric(19,2)"
+        },
+        {
+          "name": "credit_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "effective_period",
+          "type": "int4"
+        },
+        {
+          "name": "effective_end_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "reason",
+          "type": "varchar(512)"
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "deleted",
+          "type": "int2"
+        },
+        {
+          "name": "product_id",
+          "type": "varchar(256)"
+        },
+        {
+          "name": "risk_type",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "error_code",
+          "type": "varchar(32)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_credit_order_credit_no",
+          "columns": [
+            "credit_no"
+          ]
+        },
+        {
+          "name": "idx_credit_order_create_time",
+          "columns": [
+            "create_time"
+          ]
+        },
+        {
+          "name": "idx_credit_order_update_time",
+          "columns": [
+            "update_time"
+          ]
+        },
+        {
+          "name": "idx_credit_order_uid",
+          "columns": [
+            "uid"
+          ]
+        },
+        {
+          "name": "idx_credit_order_id_card_number",
+          "columns": [
+            "id_card_number"
+          ]
+        },
+        {
+          "name": "idx_credit_order_phone",
+          "columns": [
+            "phone"
+          ]
+        }
+      ]
+    },
+    {
+      "table": "credit_order_extend",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int8"
+        },
+        {
+          "name": "credit_id",
+          "type": "int8"
+        },
+        {
+          "name": "credit_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "decision_info",
+          "type": "varchar"
+        },
+        {
+          "name": "final_decision",
+          "type": "varchar(5000)"
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "deleted",
+          "type": "int2"
+        },
+        {
+          "name": "contract_sign_list",
+          "type": "varchar(2000)"
+        },
+        {
+          "name": "final_result",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "ocr_manual_review",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "ocr_failure_reasons",
+          "type": "varchar(256)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_credit_order_extend_credit_id",
+          "columns": [
+            "credit_id"
+          ]
+        },
+        {
+          "name": "idx_credit_order_extend_credit_no",
+          "columns": [
+            "credit_no"
+          ]
+        },
+        {
+          "name": "idx_credit_order_extend_create_time",
+          "columns": [
+            "create_time"
+          ]
+        },
+        {
+          "name": "idx_credit_order_extend_update_time",
+          "columns": [
+            "update_time"
+          ]
+        }
+      ]
+    },
+    {
+      "table": "cash_order",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int8"
+        },
+        {
+          "name": "channel",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "cash_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "external_cash_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "credit_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "external_user_id",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "member_id",
+          "type": "int8"
+        },
+        {
+          "name": "uid",
+          "type": "int8"
+        },
+        {
+          "name": "id_card_number",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "real_name",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "phone",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "quota_type",
+          "type": "int4"
+        },
+        {
+          "name": "flow_id",
+          "type": "int4"
+        },
+        {
+          "name": "loan_amount",
+          "type": "numeric(19,2)"
+        },
+        {
+          "name": "loan_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "loan_period",
+          "type": "int4"
+        },
+        {
+          "name": "interest_rate",
+          "type": "numeric(19,2)"
+        },
+        {
+          "name": "fund_code",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "fund_name",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "fund_product_id",
+          "type": "int8"
+        },
+        {
+          "name": "trade_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "fund_product_name",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "card_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "status",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "reason",
+          "type": "varchar(512)"
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "deleted",
+          "type": "int2"
+        },
+        {
+          "name": "product_id",
+          "type": "varchar(256)"
+        },
+        {
+          "name": "credit_id",
+          "type": "int8"
+        },
+        {
+          "name": "error_code",
+          "type": "varchar(32)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_cash_order_cash_no",
+          "columns": [
+            "cash_no"
+          ]
+        },
+        {
+          "name": "idx_cash_order_create_time",
+          "columns": [
+            "create_time"
+          ]
+        },
+        {
+          "name": "idx_cash_order_update_time",
+          "columns": [
+            "update_time"
+          ]
+        },
+        {
+          "name": "idx_cash_order_uid",
+          "columns": [
+            "uid"
+          ]
+        }
+      ]
+    },
+    {
+      "table": "cash_order_extend",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int8"
+        },
+        {
+          "name": "cash_id",
+          "type": "int8"
+        },
+        {
+          "name": "cash_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "decision_info",
+          "type": "varchar"
+        },
+        {
+          "name": "final_decision",
+          "type": "varchar(5000)"
+        },
+        {
+          "name": "pay_status",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "pay_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "reason",
+          "type": "varchar(512)"
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "deleted",
+          "type": "int2"
+        },
+        {
+          "name": "contract_sign_list",
+          "type": "varchar(2000)"
+        },
+        {
+          "name": "final_result",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "cash_process_type",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "ocr_manual_review",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "ocr_failure_reasons",
+          "type": "varchar(32)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_cash_order_extend_cash_id",
+          "columns": [
+            "cash_id"
+          ]
+        },
+        {
+          "name": "idx_cash_order_extend_cash_no",
+          "columns": [
+            "cash_no"
+          ]
+        },
+        {
+          "name": "idx_order_extend_create_time",
+          "columns": [
+            "create_time"
+          ]
+        },
+        {
+          "name": "idx_order_extend_update_time",
+          "columns": [
+            "update_time"
+          ]
+        }
+      ]
+    },
+    {
+      "table": "city_code",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int8"
+        },
+        {
+          "name": "code",
+          "type": "int4"
+        },
+        {
+          "name": "province",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "city",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "district",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "city_type",
+          "type": "int4"
+        },
+        {
+          "name": "deleted",
+          "type": "int2"
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_city_code",
+          "columns": [
+            "code"
+          ]
+        },
+        {
+          "name": "idx_province_city",
+          "columns": [
+            "province",
+            "city"
+          ]
+        }
+      ]
+    },
+    {
+      "table": "forbid",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int8"
+        },
+        {
+          "name": "channel",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "product_id",
+          "type": "varchar(256)"
+        },
+        {
+          "name": "quota_type",
+          "type": "int4"
+        },
+        {
+          "name": "member_id",
+          "type": "int8"
+        },
+        {
+          "name": "uid",
+          "type": "int8"
+        },
+        {
+          "name": "days",
+          "type": "int4"
+        },
+        {
+          "name": "end_date_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "reason",
+          "type": "varchar(512)"
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "deleted",
+          "type": "int2"
+        },
+        {
+          "name": "credit_id",
+          "type": "int8"
+        },
+        {
+          "name": "credit_no",
+          "type": "varchar(128)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_forbid_uid",
+          "columns": [
+            "uid"
+          ]
+        },
+        {
+          "name": "idx_forbid_member_id",
+          "columns": [
+            "member_id"
+          ]
+        },
+        {
+          "name": "idx_forbid_uid_create_time",
+          "columns": [
+            "create_time"
+          ]
+        },
+        {
+          "name": "idx_forbid_uid_update_time",
+          "columns": [
+            "update_time"
+          ]
+        }
+      ]
+    },
+    {
+      "table": "event_process_record",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int8"
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp"
+        },
+        {
+          "name": "deleted",
+          "type": "int2"
+        },
+        {
+          "name": "business_type",
+          "type": "varchar(64)"
+        },
+        {
+          "name": "order_no",
+          "type": "varchar(128)"
+        },
+        {
+          "name": "event_type",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "event_name",
+          "type": "varchar(256)"
+        },
+        {
+          "name": "event_state",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "message",
+          "type": "varchar"
+        },
+        {
+          "name": "count",
+          "type": "int4"
+        },
+        {
+          "name": "next_retry_time",
+          "type": "timestamp(6)"
+        },
+        {
+          "name": "payload",
+          "type": "varchar"
+        },
+        {
+          "name": "category",
+          "type": "varchar(32)"
+        },
+        {
+          "name": "cost",
+          "type": "int4"
+        },
+        {
+          "name": "version",
+          "type": "int8"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "columns": [
+            "id"
+          ]
+        },
+        {
+          "name": "idx_event_process_record_update_time",
+          "columns": [
+            "update_time"
+          ]
+        },
+        {
+          "name": "idx_process_record_order_no",
+          "columns": [
+            "order_no"
+          ]
+        },
+        {
+          "name": "idx_process_record_create_time",
+          "columns": [
+            "create_time"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -30,6 +30,7 @@ public final class ReportFixtures {
     public static final String PROD_COMMIT = "b7c1d2e3f4a5b6c7d8e9f0123456789abcdef012";
     public static final String GENERATED_AT = "2026-10-14T08:00:00+08:00";
     public static final String REPORT_PATH = "/tmp/sql-risk-out/sql_risk_report.json";
+    public static final String HTML_REPORT_PATH = "/tmp/sql-risk-out/sql_risk_report.html";
     public static final String REPO_PATH = "/repo/demo";
 
     public static final String H1_MESSAGE = "UPDATE 语句缺少 WHERE 条件，可能导致全表更新";

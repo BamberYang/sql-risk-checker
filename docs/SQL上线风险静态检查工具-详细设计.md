@@ -364,7 +364,12 @@ compute(ChangeSet cs, XmlFragmentIndex idx, EntityIndex eidx):
    - `@*Provider` → `ProviderMethodResolver`：定位 `type.method`，支持 `return "字面量"`、字面量 `+`、`StringBuilder/StringBuffer.append(字面量)`；其余语法 → skipped("无法静态解析 Provider 方法")。
 3. 以 `<script>` 开头 → carrrier 标记为脚本，交 §10.2 动态求值（与 mapper.xml 同管道）；否则纯文本，`#{}`/`${}` 保留到 §10.1。
 4. 语句范围 = 方法声明范围（注解 + 签名 + 方法体，JavaParser `MethodDeclaration.getRange()`）；范围内任意行变更 → 整条提取。
+   —— 该范围天然覆盖「SQL 注解行」与「参数声明行（含 `@Param`）」两类改动：改 SQL 或改 ew 参数绑定都会触发重新提取与分析。
 5. `statementId = 接口全限定名 + "." + 方法名`。
+6. **Wrapper SQL 段识别（v1.4 增补，FR-2 细化）**：纯文本注解 SQL 中，`${name…}` 占位符的**根名**（首个 `.` 前）解析到方法参数（`@Param("name")` 的值，或缺省取参数自身名），且该参数类型原始名以 `Wrapper` 结尾（MyBatis-Plus Wrapper 家族：`Wrapper/QueryWrapper/LambdaQueryWrapper/UpdateWrapper/AbstractWrapper/EntityWrapper…`，泛型自动剥离）→ 记入语句 `wrapperSqlParams`（有序去重），透传至解析与规则阶段。
+   - 语义：该段 WHERE 由**框架经 Wrapper 参数**在运行期生成，属框架惯用法而非字面量拼串 → **M8 不命中**（§11.4）；解析时将占位符代换为中性谓词（见 §10.6）以正常解析，骨架标记"未知片段"（报告 `uncertain=true`，提示条件来自运行期）。
+   - 绑定失配（如 `@Param` 改名而 SQL 未同步）→ 根名不再解析 → 恢复为 `${}` 拼串判定（可发现真实缺陷）。
+   - 已知边界：mapper.xml 中的 `${ew…}` 暂不识别（语句与接口方法无静态绑定通道），仍按原文命中 M8。
 
 ### 9.6 JavaConstantResolver / ProviderMethodResolver
 
@@ -379,9 +384,25 @@ public final class LambdaChainModel {
     int rangeEndLine;                                // 链范围终点（含执行调用行）
     @Nullable String entityTypeFqn;                  // 实体解析结果（可空 → 表名占位 ?）
     List<LambdaCall> calls;                          // 源码顺序调用序列
+    List<LambdaBranchGroup> branchGroups;            // 控制流分支组（M15 增补），无分支为空
 }
-public final class LambdaCall { String method; List<String> stringArgs; int line; Object argNode; }
+public final class LambdaCall { String method; List<LambdaArg> args; boolean runtimeConditional;
+                                List<LambdaCall> nested; List<LambdaBranchRef> branchPath; }
+public final class LambdaBranchRef { int groupId; int pathIndex; }   // pathIndex=-1：恒不成立分支
+public final class LambdaBranchGroup { enum Kind { IF, SWITCH }; int groupId; Kind kind; List<String> pathLabels; }
 ```
+
+**控制流分支识别（M15 增补，需求方驱动）**：wrapper 变量在方法体内的后续调用按祖先控制流语句记录分支坐标（外层→内层）：
+
+| Java 形态                     | 组路径（pathLabels）                                | 语义（对齐 XML）                          |
+| --------------------------- | ---------------------------------------------- | ----------------------------------- |
+| `if (…) {…} else {…}`       | `[if-then, if-else]`（then/else 内调用 pathIndex 0/1） | `<choose>`：渲染期枚举两分支（每分支一骨架）          |
+| `if (…) {…}`（无 else）        | `[if-skip]`，体内调用 pathIndex=-1                 | `<if>`：保守视为不成立（渲染期丢弃 + 溯源记录）        |
+| `for/foreach/while/do` 循环体  | `[loop-skip]`，体内调用 pathIndex=-1               | 同上（循环可能不执行）                         |
+| `switch/case/default`       | 每 case/default 条目一条路径（空条目落穿并入后继；无 default 追加 `switch-none`） | `<choose>`：每组各分支枚举（default ↔ otherwise） |
+
+- 变更检测不受影响：分支体内行、分支条件行均在 `[rootLine, rangeEndLine]` 内 → 照常整句提取（ac13 验证）。
+- 嵌套（if 内 if）→ 坐标叠加，渲染期按组合枚举（上限见 §10.3）。
 
 识别入口（AST 模式匹配）：
 
@@ -477,7 +498,8 @@ evaluate(...): 返回 Iterator<SqlSkeleton>（深度优先惰性展开 choose �
 
 ```java
 public final class LambdaSkeletonRenderer {
-    public SqlSkeleton render(LambdaChainModel chain, EntityMeta entity);   // entity 可空 → 表名 "?"
+    public List<SqlSkeleton> renderAll(LambdaChainModel chain, EntityIndex entityIndex); // M15：分支枚举
+    public SqlSkeleton render(LambdaChainModel chain, EntityIndex entityIndex);          // 兼容：首个骨架
 }
 ```
 
@@ -491,6 +513,12 @@ public final class LambdaSkeletonRenderer {
 ④ 输出骨架：SELECT <cols|*> FROM <table> [WHERE <树>] [GROUP BY …] [HAVING …] [ORDER BY …] [后缀]
              UPDATE <table> SET <项列表> [WHERE <树>]      DELETE FROM <table> [WHERE <树>]
 ⑤ strategyTag="base"；uncertain = (entity==null || 存在 unknown 片段 || 链不完整)
+⑥ 控制流分支枚举（M15 增补）：按 branchGroups 枚举行路径组合（笛卡尔积，单路径组不参与），
+   每组合过滤调用（未选中/恒不成立分支的调用记 DroppedBranch：未选中 sibling → RUNTIME_CONDITION，
+   无 else 的 if / 循环体 → CONSERVATIVE_FALSE；分支类型 IF/WHEN(default→OTHERWISE)，
+   角色 set 族 → SET 否则 CONDITION），各生成一个骨架；组合数超 MAX_SKELETONS=8 截断
+   （truncated=true，DD-4）；strategyTag="branch:<所选路径标签, …>"（无分支组为 "base"）。
+   多骨架由规则引擎"首命中即停"消费（AC-4）——如 ac13：switch default 路径骨架命中 H1（skeleton=1）。
 ```
 
 链式方法归约表（MyBatis-Plus 3.5.x，全量覆盖；带布尔首参的方法统一走"条件处理规则"）：
@@ -574,6 +602,12 @@ public final class ParsedSql {
 
 解析失败处理：某骨架归一化/解析抛 `SqlParseException` → 该**语句**整体计入 skipped(`PARSE_FAILED`, reason=`"解析失败：" + 原因`)，不再参与规则；其余语句不受影响。规则引擎按需惰性请求骨架（配合 §10.2 惰性枚举），首个命中骨架即停止，后续骨架不生成、不解析。
 
+**Wrapper SQL 段代换（v1.4，配合 §9.5 第 6 条）**：注解载体且语句 `wrapperSqlParams` 非空时，骨架生成前将根名匹配的 `${…}` 占位符代换为中性谓词，保证语句可解析——
+- 代换文本按占位符前的上下文确定：其前非空白内容以 `WHERE/AND/OR/NOT/ON/(` 结尾（占位符提供"条件表达式"）→ `1 = 1`；否则（占位符自带 WHERE 的 `customSqlSegment` 惯用法）→ ` WHERE 1 = 1`；
+- 代换后骨架 `hasUnknownFragment=true`（报告 `uncertain=true`："条件来自运行期 Wrapper"）；
+- 代换后仍不可解析 → 走既有"含 `${}` 短路候选"路径保留（M8 因根名被覆盖而不命中 → 按 §11.2-④ 归 SKIP）；
+- 解析失败兜底（§8.5 结构性保证）语义不变：**未解析**的 `${}` 仍以空骨架候选交语句级短路（M8）定级；未命中的空骨架归 SKIP（§11.2-④，v1.6）。
+
 ***
 
 ## 11. rule 包
@@ -598,7 +632,7 @@ public interface RuleProvider { List<Rule> rules(); }
 ### 11.2 RuleEngine（执行流程）
 
 ```
-run(List<ParsedStatement> statements, RuleEngineDeps deps):
+run(List<ParsedStatement> statements, RuleEngineDeps deps) -> Outcome{results, skipped}:
   for stmt in statements:
     // ① 语句级短路（M8）：扫描语句原文，命中即定级并结束该语句
     if M8.enabled && rawText 匹配 \$\{[^}]*\}:
@@ -612,7 +646,12 @@ run(List<ParsedStatement> statements, RuleEngineDeps deps):
     // ③ 归类
     if hit != null: result = StatementResult(level = max(levels), sql = hit.skeleton.text, …)
     else:           result = StatementResult(level = null, sql = 首个骨架文本, …)
+    // ④ 空骨架归口（v1.6）：parsed 为空（含 ${} 解析失败的短路候选）且 ① 未命中
+    //    → skipped += SkippedItem(PARSE_FAILED, "解析失败：无可用 SQL 骨架（含 ${} 且未命中短路规则）")
+    //    不再作为 level=null 结果输出（"无法分析" ≠ "已分析且无风险"）
 ```
+
+- **空骨架归口（v1.6，需求方驱动）**：解析阶段对含 `${}` 的失败语句保留空骨架"短路候选"（D8 结构性保证）不变；**短路命中（M8/AC-11）仍按原语义输出 MEDIUM**；未命中的空骨架不再进入 results，改由 `Outcome.skipped` 计入 SKIP（口径同解析失败，不影响退出码）。
 
 - 规则排序：`priority` 升序、同优先级按 ruleId 字典序（稳定输出）。
 - 单条规则 `check` 抛出异常（防御式）→ 捕获、stderr 警告（含 ruleId/statementId）、跳过该规则。
@@ -685,7 +724,7 @@ if unindexedTables 非空: 命中
 
 #### M8 — `${}` 拼串（MEDIUM / **-100**，`shortCircuit=true`）
 
-- 判定：语句**原文**（`meta` 关联的 `rawText`，含被丢弃分支）匹配 `\$\{[^}]*\}`。
+- 判定：语句**原文**（`meta` 关联的 `rawText`，含被丢弃分支）匹配 `\$\{[^}]*\}`；**排除根名已解析为 Wrapper 参数的占位符**（§9.5 第 6 条，v1.4）——全部 `${…}` 均被覆盖时不命中，其余任一未覆盖即命中。
 - 行为：语句级短路，输出唯一 Finding，不再评估任何骨架与规则（AC-11）。
 - message：`存在 ${} 拼串，归属中危，不再继续判断其他规则`。
 
@@ -726,6 +765,7 @@ if unindexedTables 非空: 命中
      {sql（截断 200 字符）}          ← {message}
 …（中危/低危明细仅 --verbose 输出）
 报告已生成: {outputDir}/sql_risk_report.json
+            {outputDir}/sql_risk_report.html
 ```
 
 - 无语句：输出 `无差异语句`（DIFF 空差异）或 `未提取到 SQL 语句`；任一情况均正常 exit 0。
@@ -741,6 +781,16 @@ if unindexedTables 非空: 命中
 ### 12.4 ReportWriter
 
 - 目标：`{outputDir}/sql_risk_report.json`；目录不存在则创建；已存在则覆盖；写失败（权限/磁盘）→ `ReportException`（exit 2）。
+
+### 12.5 HtmlReporter（交付后增补，默认双产出）
+
+- 目标：`{outputDir}/sql_risk_report.html`（与 JSON **默认同时产出**；写失败同 → `ReportException` exit 2）。JSON 仍是机器契约（CI/黄金样例基准），HTML 为**人工阅读层**。
+- 单文件、离线自包含：内联 CSS + 原生 JS（无 CDN/外链，满足不联网约束）；全部动态文本 HTML 转义（语句原文含 XML 标签/比较符必须转义）。
+- 结构：运行头（mode/commits/仓库/生成时间）→ 统计区（高/中/低/**通过**/SKIP/已忽略 + 口径恒等式行）→ 筛选栏（级别按钮 / 规则下拉 / 文件下拉 / 关键字）→ 分区明细（**高危默认展开**；中危/低危/**通过**/SKIP/已忽略默认折叠，`<details>` 原生可展开）→ 页脚（注明 JSON 契约）。
+  「通过」= 参与分析且未命中任何规则的语句数（v1.7 由"未命中风险规则/无命中"更名，含头部统计卡片与恒等式行口径；JSON 契约不变）。
+- 卡片模型：一条语句一张卡片（级别徽标 + statementId + `file:line (changeType, via …)` + 完整语句 SQL + 各 finding 消息与骨架序号）；级别筛选按语句最高级别。
+- 交互（原生 JS，无第三方）：级别/规则/文件/关键字四维筛选联动显隐卡片并实时显示可见计数；无 JS 环境下靠 `<details>` 仍可完整阅读。
+- 确定性：同一 `ReportModel` 输出逐字节一致（渲染不含当前时间等运行时值）；HTML 不参与黄金样例比对。
 
 ***
 
@@ -896,7 +946,8 @@ SqlRiskException (abstract, extends RuntimeException, int exitCode, String messa
 | `POOL_SIZE`              | min(CPU, 8) | 并行度                    |
 | `SNIPPET_LIMIT`          | 120 字符 | Finding.snippet 截断            |
 | `CONSOLE_SQL_LIMIT`      | 200 字符 | 控制台 SQL 展示截断                 |
-| `REPORT_FILE_NAME`       | `sql_risk_report.json` | 报告文件名           |
+| `REPORT_FILE_NAME`       | `sql_risk_report.json` | JSON 报告文件名（机器契约）           |
+| `REPORT_FILE_NAME_HTML`  | `sql_risk_report.html` | HTML 报告文件名（阅读层，默认双产出）  |
 | 规则默认优先级                  | M8=-100；H1..H3=10..12；M1..M6=20..25；L1/L2/L4=30..32 | §11.4 |
 
 ***
@@ -952,6 +1003,8 @@ src/test/resources/cases/<caseId>/
 | `ac11-dollar-shortcircuit`   | `${}` 出现在被丢弃分支内 → 仍短路定级 MEDIUM，无其他 findings（AC-11）           |
 | `skip-parse-failed`          | 解析失败/无法提取 → skipped[]（kind=PARSE_FAILED/UNSUPPORTED_CARRIER），不影响退出码 |
 | `m1-metadata-semantics`      | 表不在元数据 → 无索引；类型缺失 → M4 不判定                                  |
+| `ac12-annotation-wrapper`    | 注解 `${ew.customSqlSegment}` + `@Param("ew") Wrapper` 参数：仅 SQL 变更 → 不命中 M8（代换解析、uncertain）；仅参数行变更致绑定失配 → 恢复 M8（v1.4）；代换后仍不可解析（固定条件与 `${ew.sqlSegment}` 混排）→ 空骨架归 SKIP（v1.6） |
+| `ac13-lambda-branches`       | Lambda 控制流分支：if/else 两骨架（首命中即停）；switch default 路径骨架命中 H1（skeleton=1，含分支保守附注）；分支体内行变更照常提取（v1.5） |
 
 ### 18.4 单测边界清单（每规则）
 
@@ -1081,3 +1134,13 @@ SQL 上线风险静态检查工具 v0.1
 *文档完。v1.1（2026-10-14）：DD-4/DD-8/DD-9/DD-10 经需求方确认；其余 DD 项为实现级细化。基于需求文档 v1.0 与概要设计 v1.7 编制；如与概要设计冲突以本文为准并回写概要设计。*
 
 *v1.2（2026-10-14，M9 收尾回写）：① D19 role 推断补充裸 `<if>WHERE …</if>` 形态（§9.5 动态求值——H1/H2/H3 保守附注修复，ac03 暴露）；② changeType 判定细则与 changedVia 格式明确（§9.4）；③ `Set<Integer>` 行集合、ConfigLoader 实际签名、SqlSourceExtractor 实现形态回写（§8.3/§6/§9.1）；④ §12.3 `sql` 字段三态语义（命中骨架/骨架#0/M8 原文）；⑤ §18.2 夹具确定性（固定提交身份与时间）与黄金 IT 执行约定。*
+
+*v1.3（2026-10-14，交付后增补，需求方确认）：① 新增 §12.5 `HtmlReporter`——`--output` 目录默认双产出 `sql_risk_report.json` + `sql_risk_report.html`（JSON 仍为机器契约，HTML 为阅读层，含级别/规则/文件/关键字筛选与折叠）；② §12.2 控制台"报告已生成"两行列出；③ §17 增 `REPORT_FILE_NAME_HTML`；④ §5 入口调试便利（argv 为空 → `DEBUG_DEFAULT_ARGV`）。*
+
+*v1.4（2026-10-15，需求方驱动）：① §9.5 增补「Wrapper SQL 段识别」——注解 `${ew.customSqlSegment}` 等占位符在 `@Param`/参数名解析到 Wrapper 家族参数时不再误报 M8，绑定失配仍命中；② §10.6 增补占位符代换规则与 `uncertain` 语义；③ §11.4 M8 判定增加排除项；④ §18.3 增 `ac12-annotation-wrapper` 用例。*
+
+*v1.5（2026-10-15，需求方驱动）：① §9.7 增补「控制流分支识别」——wrapper 变量在 if/else、switch/case 中添加条件时记录分支坐标（M15）；② §10.3 增补分支枚举渲染（每分支一骨架，对齐 `<choose>`；无 else 的 if / 循环体按 `<if>` 保守丢弃；组合超 MAX_SKELETONS 截断）；③ §18.3 增 `ac13-lambda-branches` 用例。*
+
+*v1.6（2026-10-15，需求方驱动）：§11.2 增「空骨架归口」——解析产物为空（含 `${}` 解析失败的短路候选）且语句级短路未命中时归 SKIP（PARSE_FAILED），不再作为 `level=null` 结果输出；短路命中语义不变（AC-11）。§10.6/§18.3 同步。*
+
+*v1.7（2026-10-15，需求方驱动）：§12.5 HTML 报告文案与统计——「未命中风险规则/无命中」更名为「**通过**」（分区标题、卡片徽标、恒等式行口径），头部统计卡片新增「通过」数量；JSON 报告契约不变。*

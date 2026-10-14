@@ -1,0 +1,16 @@
+{
+  "version": "1.0",
+  "tables": [
+    {
+      "table": "cash_order",
+      "fields": [
+        { "name": "id", "type": "BIGINT" },
+        { "name": "loan_amount", "type": "DECIMAL(12,2)" },
+        { "name": "repay_amount", "type": "DECIMAL(12,2)" }
+      ],
+      "indexes": [
+        { "name": "PRIMARY", "columns": ["id"] }
+      ]
+    }
+  ]
+}

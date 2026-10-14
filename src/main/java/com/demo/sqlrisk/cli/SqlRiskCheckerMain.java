@@ -6,12 +6,14 @@ import com.demo.sqlrisk.core.AnalysisEngine;
 import com.demo.sqlrisk.core.RunContext;
 import com.demo.sqlrisk.model.ReportModel;
 import com.demo.sqlrisk.report.ConsoleReporter;
+import com.demo.sqlrisk.report.HtmlReporter;
 import com.demo.sqlrisk.report.ReportWriter;
 import com.demo.sqlrisk.util.SqlRiskException;
 
 import java.io.PrintStream;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.util.Arrays;
 
 /**
  * 程序入口（详细设计 §5）：
@@ -30,8 +32,10 @@ public final class SqlRiskCheckerMain {
      * 按需修改此处即可改变默认调试目标。
      */
     static final String[] DEBUG_DEFAULT_ARGV = {
-            "--repo", "/Users/loafer/Documents/WorkSpace/union/union-order-app",
-            "--metadata", "/tmp/union-meta.json",
+            "--repo", "/Users/loafer/Documents/WorkSpace/union/union-channel-app",
+            "--metadata", "examples/sql-risk-metadata.example.json",
+            //"--prod-commit","a32658d8aef5ca1ee7f2cbc6a0da76190844bb5b",
+            //"--head-commit","",
             "--output", "/tmp/sql-risk-debug",
             "--verbose",
     };
@@ -69,9 +73,10 @@ public final class SqlRiskCheckerMain {
                     args.outputDir(), args.verbose(), clock);
             ReportModel report = new AnalysisEngine(clock).execute(ctx);
 
-            // P9 报告输出（M8）：JSON 先落盘（写失败 → exit 2），再输出控制台摘要（含报告路径）
+            // P9 报告输出（M8 + 交付后增补）：JSON（机器契约）+ HTML（阅读层）双产出，写失败 → exit 2；再输出控制台摘要
             Path reportFile = ReportWriter.write(report, args.outputDir());
-            ConsoleReporter.print(report, args.repoPath(), reportFile.toString(), out, args.verbose());
+            Path htmlFile = HtmlReporter.write(report, args.outputDir());
+            ConsoleReporter.print(report, args.repoPath(), Arrays.asList(reportFile, htmlFile), out, args.verbose());
             return report.summary().high() > 0 ? ExitCode.HIGH_RISK : ExitCode.OK;
         } catch (SqlRiskException e) {
             err.println("[错误] " + e.getMessage());

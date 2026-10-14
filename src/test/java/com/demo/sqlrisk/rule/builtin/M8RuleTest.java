@@ -40,4 +40,37 @@ class M8RuleTest {
     void unterminated_dollar_is_not_matched() {
         assertTrue(rule.check(RuleTestSupport.statementCtx("SELECT ${broken FROM t")).isEmpty());
     }
+
+    // ---------- Wrapper SQL 段排除（§9.5-6，v1.4） ----------
+
+    @Test
+    void wrapper_param_placeholder_does_not_fire() {
+        assertTrue(rule.check(RuleTestSupport.statementCtx(
+                "SELECT SUM(loan_amount) FROM cash_order ${ew.customSqlSegment}",
+                java.util.Arrays.asList("ew"))).isEmpty(),
+                "根名解析到 Wrapper 参数 → 框架生成的条件段，非拼串");
+    }
+
+    @Test
+    void wrapper_covered_placeholder_among_sql_params_still_fires() {
+        List<Finding> findings = rule.check(RuleTestSupport.statementCtx(
+                "SELECT * FROM t WHERE a = ${userInput} AND b = 1 ${ew.customSqlSegment}",
+                java.util.Arrays.asList("ew")));
+        assertEquals(1, findings.size(), "部分占位符未被 Wrapper 覆盖 → 仍命中");
+    }
+
+    @Test
+    void binding_mismatch_fires() {
+        List<Finding> findings = rule.check(RuleTestSupport.statementCtx(
+                "SELECT SUM(loan_amount) FROM cash_order ${ew.customSqlSegment}",
+                java.util.Arrays.asList("wrapper")));
+        assertEquals(1, findings.size(), "@Param 改名而 SQL 未同步（绑定失配）→ 恢复命中");
+    }
+
+    @Test
+    void only_root_name_matching_is_exempted() {
+        List<Finding> findings = rule.check(RuleTestSupport.statementCtx(
+                "SELECT * FROM t ${ewOther.customSqlSegment}", java.util.Arrays.asList("ew")));
+        assertEquals(1, findings.size(), "根名须精确匹配参数名");
+    }
 }

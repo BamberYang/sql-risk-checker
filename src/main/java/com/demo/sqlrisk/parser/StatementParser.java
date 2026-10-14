@@ -48,8 +48,8 @@ public final class StatementParser {
     /**
      * 解析失败处理（§8.5/决策 D8 的结构性保证）：
      * 语句原文含 {@code ${...}} 时**不因解析失败而丢失 M8 短路判定**——
-     * 以空骨架的 ParsedStatement 保留（如 MP 惯用法 {@code ${ew.customSqlSegment}} 归一化后不可解析），
-     * 交由 M7 规则引擎按 M8 语句级短路定级；否则按 SKIP(PARSE_FAILED)。
+     * 以空骨架的 ParsedStatement 保留，交由规则引擎按 M8 语句级短路定级（根名未被 Wrapper 参数
+     * 覆盖的占位符，§9.5-6；已覆盖并代换成功者不落此路径）；否则按 SKIP(PARSE_FAILED)。
      */
     private static ParseOutcome handleFailure(ExtractedStatement statement, String reason) {
         String rawText = statement.rawText();
@@ -69,11 +69,24 @@ public final class StatementParser {
             return DynamicEvaluator.evaluate((DynamicXmlText) carrier, dynamicContext);
         }
         if (carrier instanceof AnnotationSqlText) {
-            return Collections.singletonList(SqlSkeleton.base(((AnnotationSqlText) carrier).sqlText()));
+            String sql = ((AnnotationSqlText) carrier).sqlText();
+            if (statement.hasWrapperSqlParams()) {
+                // Wrapper SQL 段代换（§10.6，v1.4）：条件来自运行期 Wrapper → 代换为中性谓词并可解析，
+                // 骨架标记未知片段（报告 uncertain=true）
+                WrapperSqlSubstitutor.Result result =
+                        WrapperSqlSubstitutor.substitute(sql, statement.wrapperSqlParams());
+                if (result.applied()) {
+                    return Collections.singletonList(new SqlSkeleton(result.text(),
+                            Collections.<DroppedBranch>emptyList(), SqlSkeleton.TAG_BASE,
+                            true, false, false, false));
+                }
+            }
+            return Collections.singletonList(SqlSkeleton.base(sql));
         }
         if (carrier instanceof LambdaChainModel) {
-            return Collections.singletonList(LambdaSkeletonRenderer.render(
-                    (LambdaChainModel) carrier, ctx == null ? null : ctx.entityIndex()));
+            // 控制流分支枚举（§10.3-补充，M15）：多骨架交由规则引擎"首命中即停"消费（AC-4）
+            return LambdaSkeletonRenderer.renderAll(
+                    (LambdaChainModel) carrier, ctx == null ? null : ctx.entityIndex());
         }
         throw new DynamicEvaluationException("未知载体类型: " + carrier.getClass().getName());
     }

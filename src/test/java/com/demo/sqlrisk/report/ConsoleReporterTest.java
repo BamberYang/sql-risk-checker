@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -27,7 +28,9 @@ class ConsoleReporterTest {
 
     private String render(ReportModel report, boolean verbose) {
         buf.reset();
-        ConsoleReporter.print(report, ReportFixtures.REPO_PATH, ReportFixtures.REPORT_PATH, out, verbose);
+        ConsoleReporter.print(report, ReportFixtures.REPO_PATH, Arrays.asList(
+                java.nio.file.Paths.get(ReportFixtures.REPORT_PATH),
+                java.nio.file.Paths.get(ReportFixtures.HTML_REPORT_PATH)), out, verbose);
         return new String(buf.toByteArray(), StandardCharsets.UTF_8);
     }
 
@@ -43,6 +46,8 @@ class ConsoleReporterTest {
                 + "  (MODIFIED, via com.demo.mapper.Common.baseColumns)"), "片段派生命中标注 changedVia：" + text);
         assertTrue(text.contains("← " + ReportFixtures.H1_MESSAGE), "SQL 行附命中原因：" + text);
         assertTrue(text.contains("报告已生成: " + ReportFixtures.REPORT_PATH), text);
+        assertTrue(text.contains("            " + ReportFixtures.HTML_REPORT_PATH),
+                "双产出：第二行列出 HTML 报告路径：" + text);
     }
 
     @Test

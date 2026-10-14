@@ -27,8 +27,15 @@ import com.github.javaparser.ast.expr.MethodReferenceExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
+import com.github.javaparser.ast.stmt.DoStmt;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
+import com.github.javaparser.ast.stmt.ForEachStmt;
+import com.github.javaparser.ast.stmt.ForStmt;
+import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.stmt.SwitchEntry;
+import com.github.javaparser.ast.stmt.SwitchStmt;
+import com.github.javaparser.ast.stmt.WhileStmt;
 import com.github.javaparser.ast.type.ClassOrInterfaceType;
 import com.github.javaparser.ast.type.Type;
 
@@ -38,6 +45,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -186,11 +194,12 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
                                                       EntityIndex entityIndex, String filePath) {
         int rootLine = lineOf(root);
         MethodCallExpr rootCall = root instanceof MethodCallExpr ? (MethodCallExpr) root : null;
+        BranchContext branchContext = new BranchContext(); // 控制流分支识别（§9.7-补充，M15）
 
         // 链式调用（root-first；工厂/转换调用本身不计入条件调用）
         List<LambdaCall> calls = new ArrayList<LambdaCall>();
         for (MethodCallExpr call : chainCalls(root, outermost)) {
-            calls.add(toCall(call));
+            calls.add(toCall(call, branchContext.pathOf(call)));
         }
         int rangeEnd = endLineOf(outermost);
 
@@ -220,7 +229,7 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
                 }
                 Collections.sort(usages, CALL_ORDER);
                 for (MethodCallExpr usage : usages) {
-                    calls.add(toCall(usage));
+                    calls.add(toCall(usage, branchContext.pathOf(usage)));
                     rangeEnd = Math.max(rangeEnd, endLineOf(usage));
                 }
             }
@@ -231,7 +240,7 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
         String entityTypeName = resolveEntity(root, rootCall, carrierVar, declaredTypes, entityIndex);
         boolean updateWrapper = isUpdateWrapper(root, rootCall, carrierVar, declaredTypes);
         LambdaChainModel model = new LambdaChainModel(filePath, rootLine, rangeEnd, entityTypeName,
-                calls, false, updateWrapper);
+                calls, false, updateWrapper, branchContext.groups());
         List<LambdaChainModel> out = new ArrayList<LambdaChainModel>(1);
         out.add(model);
         return out;
@@ -445,6 +454,10 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
     // ---------- 调用与参数 ----------
 
     static LambdaCall toCall(MethodCallExpr call) {
+        return toCall(call, Collections.<LambdaBranchRef>emptyList());
+    }
+
+    static LambdaCall toCall(MethodCallExpr call, List<LambdaBranchRef> branchPath) {
         String method = call.getNameAsString();
         NodeList<Expression> rawArgs = call.getArguments();
         boolean runtimeConditional = false;
@@ -478,7 +491,7 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
                 }
             }
         }
-        return new LambdaCall(method, lineOf(call), args, runtimeConditional, nested);
+        return new LambdaCall(method, lineOf(call), args, runtimeConditional, nested, branchPath);
     }
 
     /** Consumer 组内部调用（以 λ 参数为链根，递归支持多层嵌套；组内不再穿透到更深 λ）。 */
@@ -578,5 +591,128 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
     private static String fileNameOf(String path) {
         int slash = path.lastIndexOf('/');
         return slash >= 0 ? path.substring(slash + 1) : path;
+    }
+
+    // ---------- 控制流分支识别（详细设计 §9.7-补充，M15） ----------
+
+    /**
+     * 分支组注册表（每个链模型独立）。组号 = 首次命中顺序（调用按行序遍历 → 确定性）。
+     *
+     * <p>映射（对齐 XML 语义）：if/else 与 switch/case → {@code <choose>}（每分支一骨架，渲染期枚举）；
+     * 无 else 的 if 与循环体 → {@code <if>}（保守视为不成立：渲染期丢弃 + 溯源记录）。</p>
+     */
+    private static final class BranchContext {
+
+        private final Map<Node, Integer> groupIds = new IdentityHashMap<Node, Integer>();
+        private final Map<Node, LambdaBranchGroup> groupsByNode = new LinkedHashMap<Node, LambdaBranchGroup>();
+        private final Map<SwitchEntry, Integer> switchPathIndex = new IdentityHashMap<SwitchEntry, Integer>();
+
+        List<LambdaBranchGroup> groups() {
+            return new ArrayList<LambdaBranchGroup>(groupsByNode.values());
+        }
+
+        /** 调用的分支坐标（外层→内层；无控制流祖先为空）。 */
+        List<LambdaBranchRef> pathOf(Node call) {
+            List<LambdaBranchRef> reversed = new ArrayList<LambdaBranchRef>();
+            Node current = call;
+            Optional<Node> parent = current.getParentNode();
+            while (parent.isPresent() && !(parent.get() instanceof MethodDeclaration)) {
+                Node node = parent.get();
+                if (node instanceof IfStmt) {
+                    reversed.add(refForIf((IfStmt) node, current));
+                } else if (node instanceof SwitchStmt) {
+                    reversed.add(refForSwitch((SwitchStmt) node, current));
+                } else if (isLoop(node)) {
+                    reversed.add(new LambdaBranchRef(registerGroup(node,
+                            Collections.singletonList("loop-skip")), LambdaBranchRef.NEVER_TAKEN));
+                }
+                current = node;
+                parent = current.getParentNode();
+            }
+            Collections.reverse(reversed);
+            return reversed;
+        }
+
+        private LambdaBranchRef refForIf(IfStmt ifStmt, Node childUnderIf) {
+            int groupId = registerGroup(ifStmt, ifStmt.getElseStmt().isPresent()
+                    ? Arrays.asList("if-then", "if-else")
+                    : Collections.singletonList("if-skip"));
+            if (!ifStmt.getElseStmt().isPresent()) {
+                return new LambdaBranchRef(groupId, LambdaBranchRef.NEVER_TAKEN);
+            }
+            return new LambdaBranchRef(groupId, childUnderIf == ifStmt.getThenStmt() ? 0 : 1);
+        }
+
+        private LambdaBranchRef refForSwitch(SwitchStmt switchStmt, Node childUnderSwitch) {
+            int groupId = registerSwitchGroup(switchStmt);
+            Integer pathIndex = switchPathIndex.get(childUnderSwitch);
+            return new LambdaBranchRef(groupId,
+                    pathIndex == null ? LambdaBranchRef.NEVER_TAKEN : pathIndex);
+        }
+
+        private int registerSwitchGroup(SwitchStmt switchStmt) {
+            Integer existing = groupIds.get(switchStmt);
+            if (existing != null) {
+                return existing;
+            }
+            int id = groupsByNode.size();
+            List<String> labels = new ArrayList<String>();
+            List<String> pending = new ArrayList<String>(); // 空条目落穿：并入后继条目
+            boolean hasDefault = false;
+            List<SwitchEntry> entries = switchStmt.getEntries();
+            for (int i = 0; i < entries.size(); i++) {
+                SwitchEntry entry = entries.get(i);
+                boolean last = i == entries.size() - 1;
+                if (isDefault(entry)) {
+                    hasDefault = true;
+                }
+                if (entry.getStatements().isEmpty() && !last) {
+                    pending.add(entryLabel(entry));
+                    continue;
+                }
+                List<String> names = new ArrayList<String>(pending);
+                names.add(entryLabel(entry));
+                pending.clear();
+                switchPathIndex.put(entry, labels.size());
+                labels.add(String.join(" + ", names));
+            }
+            if (!hasDefault) {
+                labels.add("switch-none"); // 无 default：全部落空为合法运行路径（对齐 choose 无 otherwise）
+            }
+            groupIds.put(switchStmt, id);
+            groupsByNode.put(switchStmt, new LambdaBranchGroup(id, LambdaBranchGroup.Kind.SWITCH, labels));
+            return id;
+        }
+
+        private int registerGroup(Node node, List<String> labels) {
+            Integer existing = groupIds.get(node);
+            if (existing != null) {
+                return existing;
+            }
+            int id = groupsByNode.size();
+            groupIds.put(node, id);
+            groupsByNode.put(node, new LambdaBranchGroup(id, LambdaBranchGroup.Kind.IF, labels));
+            return id;
+        }
+
+        private static boolean isLoop(Node node) {
+            return node instanceof ForStmt || node instanceof ForEachStmt
+                    || node instanceof WhileStmt || node instanceof DoStmt;
+        }
+
+        private static boolean isDefault(SwitchEntry entry) {
+            return entry.getLabels().isEmpty();
+        }
+
+        private static String entryLabel(SwitchEntry entry) {
+            if (entry.getLabels().isEmpty()) {
+                return "default";
+            }
+            List<String> parts = new ArrayList<String>();
+            for (Expression label : entry.getLabels()) {
+                parts.add(label.toString());
+            }
+            return "case " + String.join(", ", parts);
+        }
     }
 }

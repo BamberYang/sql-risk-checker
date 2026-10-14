@@ -57,6 +57,8 @@ java -jar target/sql-risk-checker-shaded.jar --repo /path/to/repo --metadata <pa
 | `--repo <path>` | 仓库路径（必需；只读，数据源恒为提交树，不含工作区未提交内容） |
 | `--prod-commit <sha>` | 生产 commit；提供则 DIFF 模式，省略则 FULL 模式 |
 | `--metadata <path>` | 表元数据 JSON；省略时取仓库根 `sql-risk-metadata.json`（缺失/格式错误 → exit 2） |
+
+元数据格式与完整示例见 [examples/sql-risk-metadata.example.json](examples/sql-risk-metadata.example.json)（由真实 PolarDB/PostgreSQL DDL 生成，覆盖 9 张表：列类型、主键与普通/唯一/复合索引）。
 | `--config <path>` | 配置文件（覆盖内置默认；`rules`/`whitelist.statements`/`low_risk_keywords`） |
 | `--output <dir>` | 报告目录，默认 `.`；报告文件名固定 `sql_risk_report.json` |
 | `--verbose` | stderr 输出提取/白名单/解析/规则阶段进度日志 |
@@ -66,7 +68,10 @@ java -jar target/sql-risk-checker-shaded.jar --repo /path/to/repo --metadata <pa
 
 **调试**：IDE 直接运行 `main`（argv 为空）时使用 `SqlRiskCheckerMain.DEBUG_DEFAULT_ARGV` 内置默认参数（本地验证仓库 + 占位元数据 + `/tmp` 输出 + `--verbose`），并向 stderr 打印 `[调试]` 提示；正式运行请显式传参。
 
-**输出**：stdout 控制台摘要（高危明细默认展开，`--verbose` 附中/低危明细）+ `sql_risk_report.json`（字段契约见详细设计 §12.3/附录 A）。
+**输出**：stdout 控制台摘要（高危明细默认展开，`--verbose` 附中/低危明细）+ `--output` 目录双产出：
+
+- `sql_risk_report.json` —— **机器契约**（字段见详细设计 §12.3/附录 A），供 CI/脚本消费
+- `sql_risk_report.html` —— **阅读层**（详细设计 §12.5）：单文件离线自包含，浏览器直接打开；头部统计含**通过**数量，高危默认展开，中/低危/通过/SKIP/已忽略折叠，支持级别/规则/文件/关键字筛选
 
 ## 风险规则（13 条，级别可配置、启停可配置）
 
@@ -76,7 +81,7 @@ java -jar target/sql-risk-checker-shaded.jar --repo /path/to/repo --metadata <pa
 | M（中危） | M1 条件列未命中索引；M2 索引列函数包裹；M3 前导通配符 LIKE；M4 隐式类型转换；M5 笛卡尔积；M6 OR 非索引；M8 `${}` 拼串（语句级短路） |
 | L（低危） | L1 配置关键字；L2 SELECT * 且有过滤；L4 无 LIMIT 且有 WHERE |
 
-保守策略固定启用：`<if>` 恒视为 FALSE（折叠后条件丢失由 H/M 组规则暴露，命中 H1~H3 时附注提示）；Lambda 运行期布尔条件丢弃。要点：`${}` 出现在被丢弃分支内也短路定级 M8；`<sql>` 片段变更传播到全部（含跨文件、传递）引用语句并记 `changedVia`。
+保守策略固定启用：`<if>` 恒视为 FALSE（折叠后条件丢失由 H/M 组规则暴露，命中 H1~H3 时附注提示）；Lambda 运行期布尔条件丢弃。要点：`${}` 出现在被丢弃分支内也短路定级 M8（注解中 `${ew.customSqlSegment}` 等 Wrapper 段除外）；`<sql>` 片段变更传播到全部（含跨文件、传递）引用语句并记 `changedVia`；**Wrapper 链在 if/else、switch/case 中按分支追加条件时，每个分支生成独立骨架**（对齐 `<choose>`，首命中即停；无 else 的 if / 循环体按 `<if>` 保守丢弃）。
 
 ## 开发任务与日志
 

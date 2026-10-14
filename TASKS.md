@@ -119,6 +119,17 @@
 - [x] **T9.5**（2026-10-14）收尾：偏差回写（详设 v1.2：§8.3 `Set<Integer>`、§6 ConfigLoader 签名、§9.1 SPI 形态、§9.4/§9.5/D19 补充、§12.3 sql 三态、§18.1 12→13、§18.2 夹具确定性）；README（用法/参数/退出码/规则表）与 JOURNAL 更新；全量 `mvn -o clean verify` **263/263 全绿**
 - **过程中修复 2 个真实缺陷**：① 裸 `<if>WHERE …</if>` 折叠未归 `CONDITION`，H1/H2/H3 保守附注在该常见形态缺失（ac03 暴露；含 `DynNode.innerText()` 角色推断修正）；② JGit `PersonIdent(PersonIdent)` 拷贝构造器重置提交时间，夹具 SHA 跨 JVM 不稳定（黄金比对暴露；改复用固定实例）
 
+## 交付后增补（post-M9，需求方驱动）
+
+- [x] 2026-10-14 入口调试便利：argv 为空 → `DEBUG_DEFAULT_ARGV`（IDE 直跑 main 可调试），stderr 打印 `[调试]` 提示 → 详设 §5
+- [x] 2026-10-14 构建清理：禁用 shade 自动生成 `dependency-reduced-pom.xml`（本项目仅供 `java -jar` 直跑，无 install/deploy 消费场景）→ pom 注释
+- [x] 2026-10-14 HTML 阅读层报告：`--output` 默认双产出 `sql_risk_report.json`（机器契约）+ `sql_risk_report.html`（单文件离线、筛选/折叠、全量转义、确定性）→ 详设 §12.5；274 用例全绿
+- [x] 2026-10-15 注解 SQL Wrapper 段特殊处理：`${ew.customSqlSegment}`（根名解析到 `@Param` Wrapper 参数）不再误报 M8——代换解析 + `uncertain` 标记；绑定失配恢复 M8；黄金用例 ac12 → 详设 v1.4（§9.5-6/§10.6/§11.4）；291 用例全绿；真实项目 M8 误报 2 → 0
+- [x] 2026-10-15 Lambda 控制流分支枚举：if/else 与 switch/case 中对 wrapper 追加条件 → 每分支独立骨架（对齐 `<choose>`，`DroppedBranch` 溯源，组合超 8 截断）；无 else 的 if / 循环体按 `<if>` 保守丢弃；黄金用例 ac13 → 详设 v1.5（§9.7/§10.3）；300 用例全绿；真实项目 switch 四分支语句从"混合错 SQL（M1 MEDIUM）"修正为真实首分支 SQL（L2 LOW）
+- [x] 2026-10-15 元数据示例：按真实 DDL（union-order-app `init.sql`，PolarDB/PostgreSQL）生成 `examples/sql-risk-metadata.example.json`（9 张表，含 ALTER 追加列合并、唯一/复合索引），经工具实际加载验证并加守卫测试（301 用例全绿）；README 引用
+- [x] 2026-10-15 空骨架归口 SKIP：解析产物为空（含 `${}` 解析失败的短路候选）且语句级短路未命中 → 从 `level=null` 结果改归 SKIP（PARSE_FAILED，"无可用 SQL 骨架"）；短路命中语义不变（AC-11）；`RuleEngine.run` 返回 `Outcome{results, skipped}`；ac12 增第三形态；302 用例全绿 → 详设 v1.6（§11.2-④）
+- [x] 2026-10-15 HTML 报告文案与统计：分区/徽标「未命中风险规则·无命中」更名为「**通过**」，头部统计新增「通过」卡片（= total − 高 − 中 − 低）与恒等式行口径同步；JSON 契约不变；302 用例全绿 → 详设 v1.7（§12.5）
+
 ## 预研风险清单（M0.3 提前处理，结论回写本节）
 
 | 风险点                              | 影响             | 结论 / 处理                                                                                     |

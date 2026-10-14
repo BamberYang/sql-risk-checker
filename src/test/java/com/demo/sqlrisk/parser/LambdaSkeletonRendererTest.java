@@ -2,11 +2,14 @@ package com.demo.sqlrisk.parser;
 
 import com.demo.sqlrisk.extractor.lambda.EntityIndex;
 import com.demo.sqlrisk.extractor.lambda.LambdaArg;
+import com.demo.sqlrisk.extractor.lambda.LambdaBranchGroup;
+import com.demo.sqlrisk.extractor.lambda.LambdaBranchRef;
 import com.demo.sqlrisk.extractor.lambda.LambdaCall;
 import com.demo.sqlrisk.extractor.lambda.LambdaChainModel;
 import com.demo.sqlrisk.util.JavaSourceIndex;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -166,5 +169,129 @@ class LambdaSkeletonRendererTest {
                 call("eq", fn("getUserId"), val("1L")));
         assertTrue(skeleton.incomplete());
         assertTrue(skeleton.isUncertain(), "参数型 wrapper → 整句 uncertain（D11）");
+    }
+
+    // ---------- 控制流分支枚举（§10.3-补充，M15） ----------
+
+    private static LambdaCall branchCall(String method, int groupId, int pathIndex, LambdaArg... args) {
+        return new LambdaCall(method, 1, Arrays.asList(args), false,
+                Collections.<LambdaCall>emptyList(),
+                Collections.singletonList(new LambdaBranchRef(groupId, pathIndex)));
+    }
+
+    private static List<SqlSkeleton> renderAll(EntityIndex index, boolean update,
+                                               List<LambdaBranchGroup> groups, LambdaCall... calls) {
+        LambdaChainModel model = new LambdaChainModel("OrderService.java", 10, 24, "Order",
+                Arrays.asList(calls), false, update, groups);
+        return LambdaSkeletonRenderer.renderAll(model, index);
+    }
+
+    private static LambdaBranchGroup ifElseGroup() {
+        return new LambdaBranchGroup(0, LambdaBranchGroup.Kind.IF, Arrays.asList("if-then", "if-else"));
+    }
+
+    @Test
+    void if_else_enumerates_two_skeletons_with_dropped_sibling() {
+        List<SqlSkeleton> skeletons = renderAll(entityIndex(), false,
+                Collections.singletonList(ifElseGroup()),
+                call("eq", fn("getUserId"), val("1L")),
+                branchCall("eq", 0, 0, fn("getStatus"), val("NEW")),
+                branchCall("gt", 0, 1, fn("getOrderNo"), val("A")));
+
+        assertEquals(2, skeletons.size(), "if/else → 两骨架（choose 语义）");
+        assertEquals("SELECT * FROM t_order WHERE user_id = ? AND status = ?", skeletons.get(0).text());
+        assertEquals("SELECT * FROM t_order WHERE user_id = ? AND order_no > ?", skeletons.get(1).text());
+        assertEquals("branch:if-then", skeletons.get(0).strategyTag());
+        assertEquals("branch:if-else", skeletons.get(1).strategyTag());
+        // 未选中的兄弟分支记 DroppedBranch（RUNTIME_CONDITION，对齐 choose 另一路径）
+        assertEquals(1, skeletons.get(0).droppedBranches().size());
+        assertEquals(DroppedBranch.BranchType.IF, skeletons.get(0).droppedBranches().get(0).branchType());
+        assertEquals(DroppedBranch.Reason.RUNTIME_CONDITION, skeletons.get(0).droppedBranches().get(0).reason());
+        assertEquals(DroppedBranch.Role.CONDITION, skeletons.get(0).droppedBranches().get(0).role());
+        assertEquals("gt()", skeletons.get(0).droppedBranches().get(0).fragmentText());
+        assertEquals("eq()", skeletons.get(1).droppedBranches().get(0).fragmentText());
+        assertFalse(skeletons.get(0).truncated());
+    }
+
+    @Test
+    void if_without_else_drops_body_conservatively() {
+        List<SqlSkeleton> skeletons = renderAll(entityIndex(), false,
+                Collections.singletonList(new LambdaBranchGroup(0, LambdaBranchGroup.Kind.IF,
+                        Collections.singletonList("if-skip"))),
+                call("eq", fn("getUserId"), val("1L")),
+                branchCall("eq", 0, LambdaBranchRef.NEVER_TAKEN, fn("getStatus"), val("NEW")));
+
+        assertEquals(1, skeletons.size(), "无 else 的 if → 单骨架（<if> 语义，保守丢弃）");
+        assertEquals("SELECT * FROM t_order WHERE user_id = ?", skeletons.get(0).text());
+        assertEquals(SqlSkeleton.TAG_BASE, skeletons.get(0).strategyTag());
+        assertEquals(1, skeletons.get(0).droppedBranches().size());
+        assertEquals(DroppedBranch.Reason.CONSERVATIVE_FALSE, skeletons.get(0).droppedBranches().get(0).reason());
+    }
+
+    @Test
+    void switch_enumerates_case_paths_with_when_and_otherwise_types() {
+        List<SqlSkeleton> skeletons = renderAll(entityIndex(), false,
+                Collections.singletonList(new LambdaBranchGroup(0, LambdaBranchGroup.Kind.SWITCH,
+                        Arrays.asList("case 1", "case 2", "default"))),
+                branchCall("eq", 0, 0, fn("getStatus"), val("NEW")),
+                branchCall("eq", 0, 1, fn("getOrderNo"), val("A")),
+                branchCall("gt", 0, 2, fn("getUserId"), val("5L")));
+
+        assertEquals(3, skeletons.size(), "两个 case + default → 三骨架");
+        assertEquals("SELECT * FROM t_order WHERE status = ?", skeletons.get(0).text());
+        assertEquals("branch:case 1", skeletons.get(0).strategyTag());
+        assertEquals("branch:default", skeletons.get(2).strategyTag());
+        // 骨架#0 丢弃 case 2（WHEN）与 default（OTHERWISE）分支
+        assertEquals(2, skeletons.get(0).droppedBranches().size());
+        boolean sawWhen = false;
+        boolean sawOtherwise = false;
+        for (DroppedBranch dropped : skeletons.get(0).droppedBranches()) {
+            sawWhen |= dropped.branchType() == DroppedBranch.BranchType.WHEN;
+            sawOtherwise |= dropped.branchType() == DroppedBranch.BranchType.OTHERWISE;
+        }
+        assertTrue(sawWhen && sawOtherwise, "case → WHEN，default → OTHERWISE");
+    }
+
+    @Test
+    void switch_without_default_gets_none_path() {
+        List<SqlSkeleton> skeletons = renderAll(entityIndex(), false,
+                Collections.singletonList(new LambdaBranchGroup(0, LambdaBranchGroup.Kind.SWITCH,
+                        Arrays.asList("case 1", "switch-none"))),
+                branchCall("eq", 0, 0, fn("getStatus"), val("NEW")));
+
+        assertEquals(2, skeletons.size());
+        assertEquals("SELECT * FROM t_order", skeletons.get(1).text(), "无 default：全部落空为合法路径");
+        assertEquals("branch:switch-none", skeletons.get(1).strategyTag());
+    }
+
+    @Test
+    void dropped_set_call_in_update_wrapper_has_set_role() {
+        List<SqlSkeleton> skeletons = renderAll(entityIndex(), true,
+                Collections.singletonList(ifElseGroup()),
+                branchCall("set", 0, 0, fn("getStatus"), val("2")),
+                branchCall("set", 0, 1, fn("getOrderNo"), val("X")));
+
+        assertEquals(2, skeletons.size());
+        assertEquals("UPDATE t_order SET status = ?", skeletons.get(0).text());
+        assertEquals(DroppedBranch.Role.SET, skeletons.get(0).droppedBranches().get(0).role(),
+                "set/setIncrBy/setDecrBy 分支丢弃 → SET 角色");
+    }
+
+    @Test
+    void nested_groups_multiply_and_truncate_at_max_skeletons() {
+        List<LambdaBranchGroup> groups = new ArrayList<LambdaBranchGroup>();
+        for (int g = 0; g < 4; g++) {
+            groups.add(new LambdaBranchGroup(g, LambdaBranchGroup.Kind.IF, Arrays.asList("if-then", "if-else")));
+        }
+        List<LambdaCall> calls = new ArrayList<LambdaCall>();
+        for (int g = 0; g < 4; g++) {
+            calls.add(branchCall("eq", g, 0, fn("getStatus"), val("S" + g)));
+        }
+        List<SqlSkeleton> skeletons = renderAll(entityIndex(), false, groups,
+                calls.toArray(new LambdaCall[0]));
+
+        assertEquals(8, skeletons.size(), "16 组合 → MAX_SKELETONS=8 截断（DD-4）");
+        assertTrue(skeletons.get(0).truncated(), "截断标记");
+        assertEquals("branch:if-then, if-then, if-then, if-then", skeletons.get(0).strategyTag());
     }
 }

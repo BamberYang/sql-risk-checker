@@ -1,8 +1,13 @@
 package com.demo.sqlrisk.rule;
 
 import com.demo.sqlrisk.config.RuleSetting;
+import com.demo.sqlrisk.extractor.AnnotationSqlText;
+import com.demo.sqlrisk.model.ChangeType;
+import com.demo.sqlrisk.model.ExtractedStatement;
 import com.demo.sqlrisk.model.RiskLevel;
+import com.demo.sqlrisk.model.SkippedItem;
 import com.demo.sqlrisk.model.StatementResult;
+import com.demo.sqlrisk.model.StatementSource;
 import com.demo.sqlrisk.parser.ParsedSql;
 import com.demo.sqlrisk.parser.ParsedStatement;
 import com.demo.sqlrisk.parser.SqlSkeleton;
@@ -19,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** T7.1 自测：语句级短路（M8）、多骨架首命中即停（AC-4）、禁用与级别覆盖（§11.3）。 */
+/** T7.1 自测：语句级短路（M8）、多骨架首命中即停（AC-4）、空骨架归 SKIP（v1.6）、禁用与级别覆盖（§11.3）。 */
 class RuleEngineTest {
 
     @Test
@@ -28,14 +33,45 @@ class RuleEngineTest {
                 "SELECT * FROM t_order WHERE id = ${column}");
         RuleRegistry registry = RuleRegistry.create(null);
 
-        List<StatementResult> results = RuleEngine.run(
+        RuleEngine.Outcome outcome = RuleEngine.run(
                 Collections.singletonList(statement), registry, null, null);
 
+        List<StatementResult> results = outcome.results();
         assertEquals(1, results.size());
         StatementResult result = results.get(0);
         assertEquals(RiskLevel.MEDIUM, result.level());
         assertEquals(1, result.findings().size(), "短路：不再输出其他规则命中（无 L2 等）");
         assertEquals("M8", result.findings().get(0).ruleId());
+        assertTrue(outcome.skipped().isEmpty(), "短路命中 → 不归 SKIP");
+    }
+
+    @Test
+    void empty_skeleton_without_short_circuit_hit_goes_to_skip() {
+        // 空骨架短路候选（含 ${} 解析失败，§8.5 结构性保证的产物形态）；禁用 M8（短路不命中）
+        // → 归口 SKIP（v1.6 §11.2-④）——不再作为 level=null 结果输出
+        ExtractedStatement source = new ExtractedStatement("m.s", StatementSource.ANNOTATION,
+                ChangeType.MODIFIED, "A.java", 3,
+                "SELECT * FROM t_order WHERE id = 1 ${ew.sqlSegment}",
+                new AnnotationSqlText("SELECT * FROM t_order WHERE id = 1 ${ew.sqlSegment}"), null);
+        ParsedStatement statement = new ParsedStatement(source, Collections.<ParsedSql>emptyList());
+        Map<String, RuleSetting> settings = new LinkedHashMap<String, RuleSetting>();
+        settings.put("M8", new RuleSetting("M8", RiskLevel.MEDIUM, false));
+        com.demo.sqlrisk.config.AppConfig config = RuleTestSupport.config(
+                Collections.<String>emptyList(), settings);
+        RuleRegistry registry = RuleRegistry.create(config);
+
+        RuleEngine.Outcome outcome = RuleEngine.run(
+                Collections.singletonList(statement), registry, null, config);
+
+        assertTrue(outcome.results().isEmpty(), "空骨架未命中短路 → 不进入 results（无法分析 ≠ 无风险）");
+        assertEquals(1, outcome.skipped().size());
+        SkippedItem item = outcome.skipped().get(0);
+        assertEquals(SkippedItem.Kind.PARSE_FAILED, item.kind());
+        assertTrue(item.reason().startsWith("解析失败："), item.reason());
+        assertTrue(item.reason().contains("无可用 SQL 骨架"), item.reason());
+        assertEquals("m.s", item.statementId());
+        assertEquals("A.java", item.file());
+        assertEquals(3, item.line());
     }
 
     @Test
@@ -50,7 +86,7 @@ class RuleEngineTest {
         RuleRegistry registry = RuleRegistry.create(null);
 
         List<StatementResult> results = RuleEngine.run(
-                Collections.singletonList(statement), registry, RuleTestSupport.orderMetadata(), null);
+                Collections.singletonList(statement), registry, RuleTestSupport.orderMetadata(), null).results();
 
         StatementResult result = results.get(0);
         assertEquals(RiskLevel.LOW, result.level(), "首个命中骨架为 #0（LOW），不得升级为 #1 的 H1");
@@ -70,7 +106,7 @@ class RuleEngineTest {
         RuleRegistry registry = RuleRegistry.create(config);
 
         List<StatementResult> results = RuleEngine.run(
-                Collections.singletonList(statement), registry, null, config);
+                Collections.singletonList(statement), registry, null, config).results();
 
         assertEquals(1, results.size());
         assertNull(results.get(0).level(), "H1 被禁用且无其他规则命中");
@@ -87,7 +123,7 @@ class RuleEngineTest {
         RuleRegistry registry = RuleRegistry.create(config);
 
         List<StatementResult> results = RuleEngine.run(
-                Collections.singletonList(statement), registry, null, config);
+                Collections.singletonList(statement), registry, null, config).results();
 
         assertEquals(RiskLevel.LOW, results.get(0).level(), "级别覆盖生效（§11.3）");
         assertEquals(RiskLevel.LOW, results.get(0).findings().get(0).level());

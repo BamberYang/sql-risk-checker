@@ -1,0 +1,66 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "DIFF",
+  "headCommit": "1e411dba38c55eef42ae47a21c0ec6f6abad1362",
+  "prodCommit": "84919ced1764886fcf630986930b6f223ab3c6dc",
+  "summary": {
+    "total": 2,
+    "high": 0,
+    "medium": 1,
+    "low": 1,
+    "skip": 1,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.CashOrderMapper.sumByWrapper",
+      "source": "ANNOTATION",
+      "file": "src/main/java/com/demo/mapper/CashOrderMapper.java",
+      "line": 11,
+      "changeType": "MODIFIED",
+      "sql": "SELECT COALESCE(SUM(repay_amount), 0) FROM cash_order WHERE 1 = 1",
+      "findings": [
+        {
+          "ruleId": "L4",
+          "level": "LOW",
+          "message": "未限制返回行数，建议添加 LIMIT",
+          "snippet": "SELECT COALESCE(SUM(repay_amount), 0) FROM cash_order WHERE 1 = 1",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": true,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.CashOrderMapper.sumRenamed",
+      "source": "ANNOTATION",
+      "file": "src/main/java/com/demo/mapper/CashOrderMapper.java",
+      "line": 14,
+      "changeType": "MODIFIED",
+      "sql": "SELECT COALESCE(SUM(loan_amount), 0) FROM cash_order ${ew.customSqlSegment}",
+      "findings": [
+        {
+          "ruleId": "M8",
+          "level": "MEDIUM",
+          "message": "存在 ${} 拼串，归属中危，不再继续判断其他规则",
+          "snippet": "SELECT COALESCE(SUM(loan_amount), 0) FROM cash_order ${ew.customSqlSegment}",
+          "skeleton": 0
+        }
+      ],
+      "level": "MEDIUM",
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": [
+    {
+      "statementId": "com.demo.mapper.CashOrderMapper.sumMixed",
+      "file": "src/main/java/com/demo/mapper/CashOrderMapper.java",
+      "line": 17,
+      "kind": "PARSE_FAILED",
+      "reason": "解析失败：无可用 SQL 骨架（含 ${} 且未命中短路规则）"
+    }
+  ]
+}
