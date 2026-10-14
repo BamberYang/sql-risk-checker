@@ -33,11 +33,11 @@ class ConfigLoaderTest {
     }
 
     private AppConfig load(String configPath, String dbUrl) {
-        return ConfigLoader.load(new CliOverrides(configPath, null, dbUrl, "sa", ""), tempDir.toString());
+        return ConfigLoader.load(new CliOverrides(configPath, null, dbUrl, "sa", ""));
     }
 
-    private AppConfig loadWithEnv(String configPath, CliOverrides overrides, Map<String, String> env) {
-        return ConfigLoader.load(overrides, tempDir.toString(), env);
+    private AppConfig loadWithEnv(CliOverrides overrides, Map<String, String> env) {
+        return ConfigLoader.load(overrides, env);
     }
 
     @Test
@@ -77,8 +77,7 @@ class ConfigLoaderTest {
                 + "  connection_timeout_seconds: 5\n"
                 + "dialect: mysql\n");
         // 直接以 yaml 提供 datasource（不经过任何 CLI 覆盖，验证 yaml 通道）
-        AppConfig config = ConfigLoader.load(new CliOverrides(cfg.toString(), null, null, null, null),
-                tempDir.toString());
+        AppConfig config = ConfigLoader.load(new CliOverrides(cfg.toString(), null, null, null, null));
 
         RuleSetting h1 = config.rule("H1").get();
         assertEquals(RiskLevel.LOW, h1.level());
@@ -116,8 +115,7 @@ class ConfigLoaderTest {
     void cli_datasource_overrides_config_file() throws Exception {
         Path cfg = writeConfig("datasource:\n  url: \"jdbc:mysql://yaml-host:3306/db\"\n"
                 + "  username: yaml_user\n");
-        AppConfig config = ConfigLoader.load(new CliOverrides(cfg.toString(), null, DB, "cli_user", null),
-                tempDir.toString());
+        AppConfig config = ConfigLoader.load(new CliOverrides(cfg.toString(), null, DB, "cli_user", null));
         assertEquals(DB, config.datasource().url(), "CLI --db-url 优先于 yaml");
         assertEquals("cli_user", config.datasource().username(), "CLI --db-username 优先于 yaml");
     }
@@ -128,15 +126,15 @@ class ConfigLoaderTest {
         Map<String, String> env = new HashMap<String, String>();
         env.put("SQL_RISK_DB_PASSWORD", "env_pwd");
 
-        AppConfig cliWins = loadWithEnv(cfg.toString(),
+        AppConfig cliWins = loadWithEnv(
                 new CliOverrides(cfg.toString(), null, null, null, "cli_pwd"), env);
         assertEquals("cli_pwd", cliWins.datasource().password(), "CLI > 环境变量 > yaml");
 
-        AppConfig envWins = loadWithEnv(cfg.toString(),
+        AppConfig envWins = loadWithEnv(
                 new CliOverrides(cfg.toString(), null, null, null, null), env);
         assertEquals("env_pwd", envWins.datasource().password(), "环境变量 > yaml");
 
-        AppConfig yamlOnly = loadWithEnv(cfg.toString(),
+        AppConfig yamlOnly = loadWithEnv(
                 new CliOverrides(cfg.toString(), null, null, null, null),
                 Collections.<String, String>emptyMap());
         assertEquals("yaml_pwd", yamlOnly.datasource().password());
@@ -158,8 +156,8 @@ class ConfigLoaderTest {
 
     @Test
     void unsupported_dialect_fails_without_degrading() throws Exception {
-        Path cfg = writeConfig("dialect: oracle\n");
-        ConfigException e = assertThrows(ConfigException.class, () -> load(cfg.toString(), DB));
+        String path = writeConfig("dialect: oracle\n").toString();
+        ConfigException e = assertThrows(ConfigException.class, () -> load(path, DB));
         assertTrue(e.getMessage().contains("dialect 暂不支持"), e.getMessage());
         assertTrue(e.getMessage().contains("oracle"), e.getMessage());
     }
@@ -168,18 +166,20 @@ class ConfigLoaderTest {
     void invalid_timeout_fails() throws Exception {
         Path cfg = writeConfig("datasource:\n  url: \"jdbc:mysql://h/db\"\n"
                 + "  connection_timeout_seconds: -1\n");
-        assertThrows(ConfigException.class, () -> load(cfg.toString(), null));
+        String path = cfg.toString();
+        assertThrows(ConfigException.class, () -> load(path, null));
 
-        Path bad = writeConfig("datasource:\n  url: \"jdbc:mysql://h/db\"\n"
-                + "  connection_timeout_seconds: abc\n");
-        assertThrows(ConfigException.class, () -> load(bad.toString(), null));
+        String badPath = writeConfig("datasource:\n  url: \"jdbc:mysql://h/db\"\n"
+                + "  connection_timeout_seconds: abc\n").toString();
+        assertThrows(ConfigException.class, () -> load(badPath, null));
     }
 
     @Test
     void explicit_missing_config_file_fails() {
+        CliOverrides overrides = new CliOverrides(tempDir.resolve("nope.yaml").toString(),
+                null, DB, "sa", "");
         ConfigException e = assertThrows(ConfigException.class,
-                () -> ConfigLoader.load(new CliOverrides(tempDir.resolve("nope.yaml").toString(),
-                        null, DB, "sa", ""), tempDir.toString()));
+                () -> ConfigLoader.load(overrides));
         assertTrue(e.getMessage().contains("配置文件不存在"));
         assertEquals(2, e.exitCode());
     }
@@ -194,27 +194,27 @@ class ConfigLoaderTest {
 
     @Test
     void invalid_level_fails() throws Exception {
-        Path cfg = writeConfig("rules:\n  - ruleId: H1\n    level: CRITICAL\n");
-        ConfigException e = assertThrows(ConfigException.class, () -> load(cfg.toString(), DB));
+        String path = writeConfig("rules:\n  - ruleId: H1\n    level: CRITICAL\n").toString();
+        ConfigException e = assertThrows(ConfigException.class, () -> load(path, DB));
         assertTrue(e.getMessage().contains("level"));
     }
 
     @Test
     void invalid_whitelist_pattern_fails() throws Exception {
-        Path cfg = writeConfig("whitelist:\n  statements:\n    - \"com.*.mapper\"\n");
-        ConfigException e = assertThrows(ConfigException.class, () -> load(cfg.toString(), DB));
+        String path = writeConfig("whitelist:\n  statements:\n    - \"com.*.mapper\"\n").toString();
+        ConfigException e = assertThrows(ConfigException.class, () -> load(path, DB));
         assertTrue(e.getMessage().contains("白名单模式非法"));
     }
 
     @Test
     void blank_keyword_fails() throws Exception {
-        Path cfg = writeConfig("low_risk_keywords:\n  - \"  \"\n");
-        assertThrows(ConfigException.class, () -> load(cfg.toString(), DB));
+        String path = writeConfig("low_risk_keywords:\n  - \"  \"\n").toString();
+        assertThrows(ConfigException.class, () -> load(path, DB));
     }
 
     @Test
     void broken_yaml_fails() throws Exception {
-        Path cfg = writeConfig("rules: [oops\n");
-        assertThrows(ConfigException.class, () -> load(cfg.toString(), DB));
+        String path = writeConfig("rules: [oops\n").toString();
+        assertThrows(ConfigException.class, () -> load(path, DB));
     }
 }

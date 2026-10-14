@@ -43,7 +43,7 @@ public final class RuleTestSupport {
     }
 
     public static RuleContext ctx(String sql, MetadataProvider metadata, AppConfig config) {
-        return build(parsedSql(sql, metadata, SqlSkeleton.base(sql)), sql, metadata, config);
+        return build(parsedSql(metadata, SqlSkeleton.base(sql)), sql, metadata, config);
     }
 
     /** 带指定角色丢弃溯源的上下文（H1/H2/H3 提示附注测试）。 */
@@ -52,7 +52,7 @@ public final class RuleTestSupport {
                 new DroppedBranch(DroppedBranch.BranchType.IF, DroppedBranch.Reason.CONSERVATIVE_FALSE,
                         role, "AND x = 1")),
                 SqlSkeleton.TAG_BASE, false, false, false, false);
-        return build(parsedSql(sql, null, skeleton), sql, null, null);
+        return build(parsedSql(null, skeleton), sql, null, null);
     }
 
     /** 语句级上下文（parsedSql 为 null，M8 测试用）。 */
@@ -82,7 +82,7 @@ public final class RuleTestSupport {
         return new ParsedStatement(statement, parsedSqls);
     }
 
-    public static ParsedSql parsedSql(String sql, MetadataProvider metadata, SqlSkeleton skeleton) {
+    public static ParsedSql parsedSql(MetadataProvider metadata, SqlSkeleton skeleton) {
         NormalizedSql normalized = PlaceholderNormalizer.normalize(skeleton.text());
         com.alibaba.druid.sql.ast.SQLStatement ast = DruidSqlParser.parse(normalized.text());
         return new ParsedSql(skeleton, normalized, ast,

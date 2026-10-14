@@ -1,12 +1,13 @@
 package com.demo.sqlrisk.core;
 
+import com.demo.sqlrisk.diff.ChangeSet;
 import com.demo.sqlrisk.diff.CliArgProductionCommitProvider;
+import com.demo.sqlrisk.diff.DiffException;
 import com.demo.sqlrisk.diff.DiffService;
 import com.demo.sqlrisk.diff.GitRepo;
 import com.demo.sqlrisk.diff.RepoContentReader;
 import com.demo.sqlrisk.diff.RepoContext;
 import com.demo.sqlrisk.extractor.CandidateFile;
-import com.demo.sqlrisk.extractor.ExtractResult;
 import com.demo.sqlrisk.extractor.ExtractionOutput;
 import com.demo.sqlrisk.extractor.ExtractionService;
 import com.demo.sqlrisk.metadata.JdbcMetadataProvider;
@@ -29,6 +30,7 @@ import com.demo.sqlrisk.model.StatementResult;
 import com.demo.sqlrisk.model.Summary;
 import com.demo.sqlrisk.rule.RuleEngine;
 import com.demo.sqlrisk.rule.RuleRegistry;
+import com.demo.sqlrisk.util.Diagnostics;
 import com.demo.sqlrisk.util.TextUtils;
 import org.eclipse.jgit.revwalk.RevCommit;
 
@@ -54,6 +56,7 @@ import java.util.concurrent.Executors;
 public final class AnalysisEngine {
 
     private static final int MAX_POOL_SIZE = 8;
+    private static final String REASON_PREFIX = "  原因: ";
 
     private final Clock clock;
 
@@ -66,43 +69,11 @@ public final class AnalysisEngine {
         try {
             // P1 配置（已在 cli 层完成）与表元数据加载（v1.8/FR-8：JDBC 一次加载快照，加载后连接即关；
             // 连接失败/权限不足/超时 → MetadataException → exit 2）；metadata 透传至解析与规则阶段
-            MetadataProvider metadata = JdbcMetadataProvider.load(ctx.config().datasource());
-            if (ctx.verbose() && metadata instanceof JdbcMetadataProvider) {
-                System.err.println("[元数据] " + ctx.config().datasource().url() + " 加载 "
-                        + ((JdbcMetadataProvider) metadata).tableCount() + " 张表（一次加载，连接已关闭）");
-            }
+            MetadataProvider metadata = loadMetadata(ctx);
 
             // P2/P3 模式判定、差异获取与语句提取（数据源恒为提交树：DIFF 两端均提交树 / FULL 遍历 head 提交树，D21/D22）
-            List<ExtractedStatement> extracted = Collections.emptyList();
-            ExtractionOutput extraction = null;
-            GitRepo gitRepo = GitRepo.open(ctx.repoPath());
-            String headCommitName;
-            String prodCommitName = null;
-            try {
-                RevCommit head = gitRepo.resolveCommit(ctx.effectiveHeadCommitArg());
-                headCommitName = head.getName();
-                RepoContentReader reader = gitRepo.contentReader(head);
-
-                if (ctx.mode() == Mode.DIFF) {
-                    // FR-1 预留 SPI：v1 由 CLI 参数提供生产 commit
-                    String prodArg = new CliArgProductionCommitProvider(ctx.prodCommitArg())
-                            .provide(new RepoContext(ctx.repoPath()))
-                            .orElseThrow(() -> new com.demo.sqlrisk.diff.DiffException("DIFF 模式缺少 --prod-commit"));
-                    RevCommit prod = gitRepo.resolveCommit(prodArg);
-                    prodCommitName = prod.getName();
-                    if (!prod.getName().equals(head.getName())) {
-                        com.demo.sqlrisk.diff.ChangeSet changeSet = DiffService.diff(gitRepo, prod, head);
-                        extraction = ExtractionService.run(Mode.DIFF, changeSet,
-                                loadCandidates(reader, ".xml"), loadCandidates(reader, ".java"), ctx.config());
-                    }
-                    // prod == head → 空差异：0 条语句，正常结束（§4.3）
-                } else {
-                    extraction = ExtractionService.run(Mode.FULL, null,
-                            loadCandidates(reader, ".xml"), loadCandidates(reader, ".java"), ctx.config());
-                }
-            } finally {
-                gitRepo.close();
-            }
+            RepoExtraction repo = extract(ctx);
+            ExtractionOutput extraction = repo.extraction();
 
             // P5/P6 骨架生成与解析（保守求值 / Lambda 渲染 → 归一化 → Druid → 语句事实）
             List<SkippedItem> skipped = new ArrayList<SkippedItem>(); // P3/P5/P6 的 SKIP
@@ -110,37 +81,19 @@ public final class AnalysisEngine {
             List<SkippedItem> parseFailures = new ArrayList<SkippedItem>();
             List<IgnoredItem> ignored = new ArrayList<IgnoredItem>(); // P4 白名单命中
             List<ParsedStatement> parsedStatements = new ArrayList<ParsedStatement>();
+            List<ExtractedStatement> extracted = Collections.emptyList();
             int skeletonCount = 0;
             if (extraction != null) {
                 extracted = extraction.result().statements();
                 extractionSkipped.addAll(extraction.result().skipped());
                 skipped.addAll(extractionSkipped);
 
-                // P4 白名单过滤（M8，§13.3）：仅 mapper.xml / 注解参与，Lambda 不参与校验；
-                // 命中语句不进入 P5 之后任何阶段，计入 ignored[]
-                List<ExtractedStatement> accepted = new ArrayList<ExtractedStatement>();
-                for (ExtractedStatement statement : extracted) {
-                    if (WhitelistFilter.isIgnored(statement, ctx.config().whitelistStatements())) {
-                        ignored.add(WhitelistFilter.toIgnored(statement));
-                    } else {
-                        accepted.add(statement);
-                    }
-                }
-
-                ParseContext parseContext = new ParseContext(
-                        new DynamicEvalContext(extraction.xmlIndex(), extraction.xmlContents()),
-                        extraction.entityIndex(), metadata,
-                        SqlDialects.of(ctx.config().dialect())); // v1.8：方言经配置校验后此处取实现
-                for (ExtractedStatement statement : accepted) {
-                    ParseOutcome outcome = StatementParser.parse(statement, parseContext);
-                    if (outcome.parsed() != null) {
-                        parsedStatements.add(outcome.parsed());
-                        skeletonCount += outcome.parsed().parsed().size();
-                    } else {
-                        parseFailures.add(outcome.skipped());
-                        skipped.add(outcome.skipped());
-                    }
-                }
+                // P4 白名单过滤（M8，§13.3）：命中语句不进入 P5 之后任何阶段
+                List<ExtractedStatement> accepted =
+                        filterWhitelist(extracted, ctx.config().whitelistStatements(), ignored);
+                skeletonCount = parseAll(accepted, parseContextOf(extraction, metadata, ctx),
+                        parsedStatements, parseFailures);
+                skipped.addAll(parseFailures);
             }
             if (ctx.verbose()) {
                 logExtraction(extracted, extractionSkipped);
@@ -166,10 +119,118 @@ public final class AnalysisEngine {
 
             // P9 输出由 cli 层完成（M8：ConsoleReporter / ReportWriter）
             return new ReportModel(OffsetDateTime.now(clock), ctx.mode(),
-                    headCommitName, prodCommitName, summary, results, ignored, skipped);
+                    repo.headCommitName(), repo.prodCommitName(), summary, results, ignored, skipped);
         } finally {
             executor.shutdown();
         }
+    }
+
+    /** P2/P3 产物：提交名（报告用）+ 提取结果（prod == head 空差异时为 null，§4.3）。 */
+    private static final class RepoExtraction {
+
+        private final String headCommitName;
+        private final String prodCommitName; // FULL 或未走 DIFF 时为 null
+        private final ExtractionOutput extraction; // 空差异时为 null
+
+        RepoExtraction(String headCommitName, String prodCommitName, ExtractionOutput extraction) {
+            this.headCommitName = headCommitName;
+            this.prodCommitName = prodCommitName;
+            this.extraction = extraction;
+        }
+
+        String headCommitName() {
+            return headCommitName;
+        }
+
+        String prodCommitName() {
+            return prodCommitName;
+        }
+
+        ExtractionOutput extraction() {
+            return extraction;
+        }
+    }
+
+    /** P1：表元数据 JDBC 一次加载（v1.8/FR-8；失败 → MetadataException → exit 2）。 */
+    private static MetadataProvider loadMetadata(RunContext ctx) {
+        MetadataProvider metadata = JdbcMetadataProvider.load(ctx.config().datasource());
+        if (ctx.verbose() && metadata instanceof JdbcMetadataProvider) {
+            Diagnostics.warn("[元数据] " + ctx.config().datasource().url() + " 加载 "
+                    + ((JdbcMetadataProvider) metadata).tableCount() + " 张表（一次加载，连接已关闭）");
+        }
+        return metadata;
+    }
+
+    /** P2/P3：打开仓库（提交树只读）→ 解析提交 → 按模式提取。 */
+    private static RepoExtraction extract(RunContext ctx) {
+        GitRepo gitRepo = GitRepo.open(ctx.repoPath());
+        try {
+            RevCommit head = gitRepo.resolveCommit(ctx.effectiveHeadCommitArg());
+            RepoContentReader reader = gitRepo.contentReader(head);
+            if (ctx.mode() == Mode.DIFF) {
+                return extractDiff(gitRepo, ctx, reader, head);
+            }
+            ExtractionOutput extraction = ExtractionService.run(Mode.FULL, null,
+                    loadCandidates(reader, ".xml"), loadCandidates(reader, ".java"), ctx.config());
+            return new RepoExtraction(head.getName(), null, extraction);
+        } finally {
+            gitRepo.close();
+        }
+    }
+
+    /** DIFF：生产 commit 由 SPI 提供（FR-1 预留）；prod == head → 空差异（0 条语句，§4.3）。 */
+    private static RepoExtraction extractDiff(GitRepo gitRepo, RunContext ctx,
+                                              RepoContentReader reader, RevCommit head) {
+        String prodArg = new CliArgProductionCommitProvider(ctx.prodCommitArg())
+                .provide(new RepoContext(ctx.repoPath()))
+                .orElseThrow(() -> new DiffException("DIFF 模式缺少 --prod-commit"));
+        RevCommit prod = gitRepo.resolveCommit(prodArg);
+        if (prod.getName().equals(head.getName())) {
+            return new RepoExtraction(head.getName(), prod.getName(), null);
+        }
+        ChangeSet changeSet = DiffService.diff(gitRepo, prod, head);
+        ExtractionOutput extraction = ExtractionService.run(Mode.DIFF, changeSet,
+                loadCandidates(reader, ".xml"), loadCandidates(reader, ".java"), ctx.config());
+        return new RepoExtraction(head.getName(), prod.getName(), extraction);
+    }
+
+    /** P4 白名单（M8，§13.3）：仅 mapper.xml / 注解参与，Lambda 不参与校验；命中计入 ignored[]。 */
+    private static List<ExtractedStatement> filterWhitelist(List<ExtractedStatement> extracted,
+                                                            List<String> whitelist,
+                                                            List<IgnoredItem> ignored) {
+        List<ExtractedStatement> accepted = new ArrayList<ExtractedStatement>();
+        for (ExtractedStatement statement : extracted) {
+            if (WhitelistFilter.isIgnored(statement, whitelist)) {
+                ignored.add(WhitelistFilter.toIgnored(statement));
+            } else {
+                accepted.add(statement);
+            }
+        }
+        return accepted;
+    }
+
+    /** P5/P6：解析全部入选语句；返回骨架总数，解析失败计入 failures。 */
+    private static int parseAll(List<ExtractedStatement> accepted, ParseContext parseContext,
+                                List<ParsedStatement> parsed, List<SkippedItem> failures) {
+        int skeletons = 0;
+        for (ExtractedStatement statement : accepted) {
+            ParseOutcome outcome = StatementParser.parse(statement, parseContext);
+            if (outcome.parsed() != null) {
+                parsed.add(outcome.parsed());
+                skeletons += outcome.parsed().parsed().size();
+            } else {
+                failures.add(outcome.skipped());
+            }
+        }
+        return skeletons;
+    }
+
+    private static ParseContext parseContextOf(ExtractionOutput extraction, MetadataProvider metadata,
+                                               RunContext ctx) {
+        return new ParseContext(
+                new DynamicEvalContext(extraction.xmlIndex(), extraction.xmlContents()),
+                extraction.entityIndex(), metadata,
+                SqlDialects.of(ctx.config().dialect())); // v1.8：方言经配置校验后此处取实现
     }
 
     /** 提交树候选内容装载（P3 输入；*.java / *.xml，FR-2 承载形式）。 */
@@ -186,17 +247,17 @@ public final class AnalysisEngine {
 
     /** --verbose 的提取阶段进度日志（stderr，不污染 stdout 报告契约；M8 报告格式不受影响）。 */
     private static void logExtraction(List<ExtractedStatement> statements, List<SkippedItem> skipped) {
-        System.err.println("[提取] 变动语句 " + statements.size() + " 条，SKIP " + skipped.size() + " 条");
+        Diagnostics.warn("[提取] 变动语句 " + statements.size() + " 条，SKIP " + skipped.size() + " 条");
         for (ExtractedStatement statement : statements) {
-            System.err.println("[提取] " + statement.statementId()
+            Diagnostics.warn("[提取] " + statement.statementId()
                     + "  " + statement.file() + ":" + statement.line()
                     + "  (" + statement.changeType()
                     + (statement.changedVia() != null ? ", via " + statement.changedVia() : "") + ")");
-            System.err.println("        " + TextUtils.truncate(
+            Diagnostics.warn("        " + TextUtils.truncate(
                     TextUtils.collapseWhitespace(statement.rawText()), 100));
         }
         for (SkippedItem item : skipped) {
-            System.err.println("[提取] SKIP " + item.file() + "  原因: " + item.reason());
+            Diagnostics.warn("[提取] SKIP " + item.file() + REASON_PREFIX + item.reason());
         }
     }
 
@@ -205,9 +266,9 @@ public final class AnalysisEngine {
         if (ignored.isEmpty()) {
             return;
         }
-        System.err.println("[白名单] 忽略 " + ignored.size() + " 条");
+        Diagnostics.warn("[白名单] 忽略 " + ignored.size() + " 条");
         for (IgnoredItem item : ignored) {
-            System.err.println("[白名单] IGNORE " + item.statementId()
+            Diagnostics.warn("[白名单] IGNORE " + item.statementId()
                     + "  " + item.file() + ":" + item.line());
         }
     }
@@ -215,31 +276,31 @@ public final class AnalysisEngine {
     /** --verbose 的解析阶段进度日志（stderr）：骨架与事实摘要 + 解析失败明细。 */
     private static void logParsing(List<ParsedStatement> parsed, int skeletons,
                                    List<SkippedItem> failures) {
-        System.err.println("[解析] 成功 " + parsed.size() + " 条（骨架 " + skeletons + " 个），解析失败 "
+        Diagnostics.warn("[解析] 成功 " + parsed.size() + " 条（骨架 " + skeletons + " 个），解析失败 "
                 + failures.size() + " 条");
         for (ParsedStatement statement : parsed) {
             if (statement.parsed().isEmpty()) {
-                System.err.println("[解析] " + statement.source().statementId()
+                Diagnostics.warn("[解析] " + statement.source().statementId()
                         + "  含 ${} 且解析失败 → 短路候选（M7 按 M8 定级）");
                 continue;
             }
             QueryFacts facts = statement.parsed().get(0).facts();
-            System.err.println("[解析] " + statement.source().statementId()
+            Diagnostics.warn("[解析] " + statement.source().statementId()
                     + "  kind=" + facts.kind()
                     + " where=" + facts.hasWhere()
                     + " limit=" + facts.hasLimit()
                     + " tables=" + facts.tables());
         }
         for (SkippedItem failure : failures) {
-            System.err.println("[解析] SKIP " + failure.statementId() + "  原因: " + failure.reason());
+            Diagnostics.warn("[解析] SKIP " + failure.statementId() + REASON_PREFIX + failure.reason());
         }
     }
 
     /** --verbose 的空骨架归口提示（v1.6）：仅命中时输出。 */
     private static void logEmptySkeletonSkips(List<SkippedItem> skipped) {
         for (SkippedItem item : skipped) {
-            System.err.println("[规则] SKIP " + item.statementId() + "  " + item.file() + ":" + item.line()
-                    + "  原因: " + item.reason());
+            Diagnostics.warn("[规则] SKIP " + item.statementId() + "  " + item.file() + ":" + item.line()
+                    + REASON_PREFIX + item.reason());
         }
     }
 
@@ -261,10 +322,10 @@ public final class AnalysisEngine {
                 }
             }
         }
-        System.err.println("[规则] 命中 " + total + " 条 finding（高危 " + high + " | 中危 " + medium + " | 低危 " + low + "）");
+        Diagnostics.warn("[规则] 命中 " + total + " 条 finding（高危 " + high + " | 中危 " + medium + " | 低危 " + low + "）");
         for (StatementResult result : results) {
             for (Finding finding : result.findings()) {
-                System.err.println("[规则] [" + finding.ruleId() + "] " + result.meta().statementId()
+                Diagnostics.warn("[规则] [" + finding.ruleId() + "] " + result.meta().statementId()
                         + "  " + finding.message());
             }
         }

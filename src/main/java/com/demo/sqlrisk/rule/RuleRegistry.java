@@ -16,6 +16,7 @@ import com.demo.sqlrisk.rule.builtin.M4Rule;
 import com.demo.sqlrisk.rule.builtin.M5Rule;
 import com.demo.sqlrisk.rule.builtin.M6Rule;
 import com.demo.sqlrisk.rule.builtin.M8Rule;
+import com.demo.sqlrisk.util.Diagnostics;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -26,6 +27,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 规则注册与配置覆盖（详细设计 §11.3）：内置 13 条 + {@link ServiceLoader} 外部规则；
@@ -60,7 +62,7 @@ public final class RuleRegistry {
         for (RuleProvider provider : ServiceLoader.load(RuleProvider.class)) {
             for (Rule rule : provider.rules()) {
                 if (registry.byId.containsKey(rule.id())) {
-                    System.err.println("[警告] 外部规则与内置规则 ID 冲突，忽略: " + rule.id());
+                    Diagnostics.warn("[警告] 外部规则与内置规则 ID 冲突，忽略: " + rule.id());
                 } else {
                     registry.register(rule);
                 }
@@ -77,13 +79,7 @@ public final class RuleRegistry {
 
     /** 启用规则（priority 升序；被配置禁用的除外）。 */
     public List<Rule> enabledRules() {
-        List<Rule> out = new ArrayList<Rule>();
-        for (Rule rule : rules) {
-            if (isEnabled(rule.id())) {
-                out.add(rule);
-            }
-        }
-        return out;
+        return rules.stream().filter(rule -> isEnabled(rule.id())).collect(Collectors.toList());
     }
 
     public boolean isEnabled(String ruleId) {

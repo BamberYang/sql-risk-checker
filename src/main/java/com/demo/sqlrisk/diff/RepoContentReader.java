@@ -9,13 +9,13 @@ import org.eclipse.jgit.treewalk.TreeWalk;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.stream.Collectors;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -65,13 +65,9 @@ public final class RepoContentReader {
 
     /** 提交树内匹配过滤器的全部路径（字典序；来源为提交树而非工作区）。 */
     public synchronized List<String> listFiles(Predicate<String> filter) {
-        List<String> out = new ArrayList<String>();
-        for (String path : new TreeMap<String, ObjectId>(blobsOrLoad()).keySet()) {
-            if (filter.test(path)) {
-                out.add(path);
-            }
-        }
-        return out;
+        return new TreeMap<String, ObjectId>(blobsOrLoad()).keySet().stream()
+                .filter(filter)
+                .collect(Collectors.toList());
     }
 
     private Map<String, ObjectId> blobsOrLoad() {

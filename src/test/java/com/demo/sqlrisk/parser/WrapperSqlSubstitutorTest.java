@@ -11,6 +11,7 @@ import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** v1.4（详设 §10.6）：Wrapper 占位符代换——上下文判定、未匹配保持、代换后可解析（未知片段标记）。 */
@@ -71,7 +72,7 @@ class WrapperSqlSubstitutorTest {
                 null, Arrays.asList("ew"));
         ParseOutcome outcome = StatementParser.parse(statement, new ParseContext(null, null, null));
 
-        assertTrue(outcome.parsed() != null, "代换后应可解析（不再落入短路候选/SKIP）");
+        assertNotNull(outcome.parsed(), "代换后应可解析（不再落入短路候选/SKIP）");
         ParsedStatement parsed = outcome.parsed();
         assertEquals(1, parsed.parsed().size());
         assertTrue(parsed.parsed().get(0).facts().hasWhere(), "占位符代换后的 WHERE 视为存在");

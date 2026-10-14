@@ -12,9 +12,9 @@ SQL 上线风险静态检查工具：Java 8 CLI，基于 Git diff 仅提取本�
 | ---- | ---- | ----------------------------------------------------- |
 | 需求文档 | v1.0 | FR / AC / 边界                                          |
 | 概要设计 | v1.7 | 架构、模块、决策 D1~D23（均已确认）                                 |
-| 详细设计 | v1.2 | 编码直接依据：类结构、方法签名、算法伪码、规则详设、测试用例（DD-1~DD-12）             |
+| 详细设计 | v1.9 | 编码直接依据：类结构、方法签名、算法伪码、规则详设、测试用例（DD-1~DD-12）             |
 
-实现已完成（M0~M9 + 扩展 M10 数据库元数据 / M11 方言 SPI；312 用例全绿）。改动前先读详细设计对应章节，并保持文档与代码同步（实现偏差 → 回写文档，见详设版本变更记录与 v1.8 实现回写）。
+实现已完成（M0~M9 + 扩展 M10 数据库元数据 / M11 方言 SPI；314 用例全绿）。改动前先读详细设计对应章节，并保持文档与代码同步（实现偏差 → 回写文档，见详设版本变更记录与 v1.8/v1.9 实现回写）。
 
 ## 常用命令
 
@@ -40,6 +40,8 @@ java -jar target/sql-risk-checker-shaded.jar --repo <path> --prod-commit <sha> -
 - **规则集固定**：H1~H3、M1~M6、M8、L1/L2/L4；L3、M7 编号保留不复用。M8 为语句级短路规则（扫语句**原文**，含被丢弃分支，优先级 -100 先行），**排除根名解析到 Wrapper 参数的 `${…}`**（如 `${ew.customSqlSegment}`，详设 §9.5-6/§10.6）；**空骨架（含 `${}` 解析失败）未命中短路规则 → SKIP**（不输出为无风险结果，§11.2-④ v1.6）。规则优先级/短路标记硬编码，仅 level/enabled 可配置。
 - **范围边界**：普通 QueryWrapper（字符串列名链式）与 BaseMapper 内置方法不解析（D23）；链式方法表中未收录的方法 → 忽略该条件并标 `hasUnknownFragment`，不猜测语义（DD-8）。
 - **报告契约**：需求 §10.2 字段 + 追加字段（mode/source/uncertain/changedVia/skeleton、changeType:FULL，D5 已确认）；口径：total=results.length，提取总数=total+skip+ignored。`--output` 默认双产出：JSON 为机器契约（黄金样例基准），HTML 为阅读层（§12.5，不参与黄金比对）。
+- **Sonar 代码规范（强制，需求方要求，扫描验证）**：新增/修改的代码必须满足 Sonar 代码规范（以需求方的扫描配置/规则集为准，需求方会复扫）。生成代码前自查常见类别：重复字符串字面量（S1192）、认知/圈复杂度（S3776/S1541）、未使用导入/变量/字段（S1128/S1481/S1068）、空捕获块与吞异常（S108/S1166）、资源未关闭（S2095）、参数过多（S107）、空方法/空块（S1186/S108）、泛型原始类型（S2293）等。
+- **Sonar 设计性例外**：CLI 契约本身使用的 `System.out/System.err`（S106）、`System.exit`（S1147）、顶层 `Throwable` 兜底（S1181）、值对象构造器参数多（S107）等属于设计要求；此类命中须**集中登记豁免（附理由/替代保障/失效条件）于 `docs/sonar-exceptions.md`**，不得就地静默抑制（`@SuppressWarnings` 需注明规则与原因）。生产代码的 stderr 诊断统一走 `util/Diagnostics.warn`（唯一豁免点）。
 - **元数据为必需输入（v1.8 起来源为数据库）**：启动时经 JDBC **一次加载**（只读、加载后连接即关；连接失败/权限不足/超时 → exit 2）；表不在加载结果中 = 无索引（M1 保守命中）。连接配置：yaml `datasource` 段 + CLI（`--db-url/--db-username/--db-password`）+ 环境变量 `SQL_RISK_DB_PASSWORD`（密码优先级 CLI > 环境变量 > yaml）。
 
 模块依赖硬约束（概要设计 §3.3）：`cli → core → 其余`；`rule` 不得依赖 `diff`/`extractor`（规则只读 QueryFacts + 上下文）；`model` 零依赖；`config → metadata`、`config → parser`（方言取值校验经 `SqlDialects.supportedNames()`）。跨模块 SPI：`ProductionCommitProvider`（diff）、`MetadataProvider`（metadata）、`RuleProvider`（rule，ServiceLoader）、`SqlDialect`（parser，ServiceLoader 方言扩展）。

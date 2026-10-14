@@ -48,34 +48,38 @@ public final class EntityIndex {
         for (CompilationUnit cu : sourceIndex.allCompilationUnits()) {
             String pkg = cu.getPackageDeclaration().map(pd -> pd.getNameAsString()).orElse("");
             for (TypeDeclaration<?> type : cu.getTypes()) {
-                String simple = type.getNameAsString();
-                String fqn = pkg.isEmpty() ? simple : pkg + "." + simple;
-
-                EntityMeta meta = buildEntityMeta(type, simple);
-                if (!byName.containsKey(fqn)) {
-                    byName.put(fqn, meta);
-                }
-                if (!byName.containsKey(simple)) {
-                    byName.put(simple, meta);
-                }
-
-                if (type.isClassOrInterfaceDeclaration()) {
-                    for (ClassOrInterfaceType extended
-                            : type.asClassOrInterfaceDeclaration().getExtendedTypes()) {
-                        String entityTypeName = entityTypeName(extended);
-                        if (entityTypeName != null) {
-                            if (!entityOfType.containsKey(fqn)) {
-                                entityOfType.put(fqn, entityTypeName);
-                            }
-                            if (!entityOfType.containsKey(simple)) {
-                                entityOfType.put(simple, entityTypeName);
-                            }
-                        }
-                    }
-                }
+                indexType(type, pkg, byName, entityOfType);
             }
         }
         return new EntityIndex(byName, entityOfType);
+    }
+
+    /** 单个类型入索引：实体映射（FQN + 简名，先到先得）与泛型反解。 */
+    private static void indexType(TypeDeclaration<?> type, String pkg,
+                                  Map<String, EntityMeta> byName, Map<String, String> entityOfType) {
+        String simple = type.getNameAsString();
+        String fqn = pkg.isEmpty() ? simple : pkg + "." + simple;
+
+        EntityMeta meta = buildEntityMeta(type, simple);
+        putIfAbsent(byName, fqn, meta);
+        putIfAbsent(byName, simple, meta);
+
+        if (!type.isClassOrInterfaceDeclaration()) {
+            return;
+        }
+        for (ClassOrInterfaceType extended : type.asClassOrInterfaceDeclaration().getExtendedTypes()) {
+            String entityTypeName = entityTypeName(extended);
+            if (entityTypeName != null) {
+                putIfAbsent(entityOfType, fqn, entityTypeName);
+                putIfAbsent(entityOfType, simple, entityTypeName);
+            }
+        }
+    }
+
+    private static <V> void putIfAbsent(Map<String, V> map, String key, V value) {
+        if (!map.containsKey(key)) {
+            map.put(key, value);
+        }
     }
 
     private static String entityTypeName(ClassOrInterfaceType extended) {
@@ -98,47 +102,68 @@ public final class EntityIndex {
     }
 
     private static EntityMeta buildEntityMeta(TypeDeclaration<?> type, String simpleName) {
+        Map<String, String> explicitColumns = new LinkedHashMap<String, String>();
+        Set<String> excluded = new LinkedHashSet<String>();
+        for (FieldDeclaration field : type.getFields()) {
+            indexField(field, explicitColumns, excluded);
+        }
+        String tableName = tableNameOf(type, simpleName);
+        return new EntityMeta(simpleName, tableName, explicitColumns, excluded);
+    }
+
+    /** {@code @TableName} 显式表名；无 → 简名转蛇形。 */
+    private static String tableNameOf(TypeDeclaration<?> type, String simpleName) {
         String table = null;
         for (AnnotationExpr annotation : type.getAnnotations()) {
             if ("TableName".equals(annotation.getName().getIdentifier())) {
                 table = annotationStringValue(annotation);
             }
         }
+        return table != null ? table : TextUtils.camelToSnake(simpleName);
+    }
 
-        Map<String, String> explicitColumns = new LinkedHashMap<String, String>();
-        Set<String> excluded = new LinkedHashSet<String>();
-        for (FieldDeclaration field : type.getFields()) {
-            String column = null;
-            boolean exist = true;
-            for (AnnotationExpr annotation : field.getAnnotations()) {
-                String id = annotation.getName().getIdentifier();
-                if ("TableField".equals(id)) {
-                    String value = annotationStringValue(annotation);
-                    if (value != null) {
-                        column = value;
-                    }
-                    Boolean existMember = annotationBooleanMember(annotation, "exist");
-                    if (existMember != null) {
-                        exist = existMember;
-                    }
-                } else if ("TableId".equals(id)) {
-                    String value = annotationStringValue(annotation);
-                    if (value != null) {
-                        column = value;
-                    }
-                }
+    /** 字段入索引：{@code @TableField(exist=false)} → 排除列；显式列名 → 映射表。 */
+    private static void indexField(FieldDeclaration field, Map<String, String> explicitColumns,
+                                   Set<String> excluded) {
+        String column = explicitColumnOf(field);
+        boolean exist = existFlagOf(field);
+        for (VariableDeclarator variable : field.getVariables()) {
+            String property = variable.getNameAsString();
+            if (!exist) {
+                excluded.add(property);
+            } else if (column != null) {
+                explicitColumns.put(property, column);
             }
-            for (VariableDeclarator variable : field.getVariables()) {
-                String property = variable.getNameAsString();
-                if (!exist) {
-                    excluded.add(property);
-                } else if (column != null) {
-                    explicitColumns.put(property, column);
+        }
+    }
+
+    /** {@code @TableField/@TableId} 的显式列名（后写覆盖先写，与注解顺序一致）；无 → null。 */
+    private static String explicitColumnOf(FieldDeclaration field) {
+        String column = null;
+        for (AnnotationExpr annotation : field.getAnnotations()) {
+            String id = annotation.getName().getIdentifier();
+            if ("TableField".equals(id) || "TableId".equals(id)) {
+                String value = annotationStringValue(annotation);
+                if (value != null) {
+                    column = value;
                 }
             }
         }
-        String tableName = table != null ? table : TextUtils.camelToSnake(simpleName);
-        return new EntityMeta(simpleName, tableName, explicitColumns, excluded);
+        return column;
+    }
+
+    /** {@code @TableField(exist=...)} 标记；缺省 true。 */
+    private static boolean existFlagOf(FieldDeclaration field) {
+        boolean exist = true;
+        for (AnnotationExpr annotation : field.getAnnotations()) {
+            if ("TableField".equals(annotation.getName().getIdentifier())) {
+                Optional<Boolean> existMember = annotationBooleanMember(annotation, "exist");
+                if (existMember.isPresent()) {
+                    exist = existMember.get();
+                }
+            }
+        }
+        return exist;
     }
 
     /** 注解 value 成员（单值或 normal 的 value=）的字符串字面量。 */
@@ -157,15 +182,16 @@ public final class EntityIndex {
         return null;
     }
 
-    static Boolean annotationBooleanMember(AnnotationExpr annotation, String member) {
+    /** 注解成员中的布尔字面量（如 {@code @TableField(exist = false)}）；缺省/非布尔 → empty。 */
+    static Optional<Boolean> annotationBooleanMember(AnnotationExpr annotation, String member) {
         if (annotation.isNormalAnnotationExpr()) {
             for (MemberValuePair pair : annotation.asNormalAnnotationExpr().getPairs()) {
                 if (member.equals(pair.getNameAsString()) && pair.getValue().isBooleanLiteralExpr()) {
-                    return pair.getValue().asBooleanLiteralExpr().getValue();
+                    return Optional.of(pair.getValue().asBooleanLiteralExpr().getValue());
                 }
             }
         }
-        return null;
+        return Optional.empty();
     }
 
     /** 按 FQN 或简名解析实体。 */

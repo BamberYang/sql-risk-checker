@@ -12,6 +12,7 @@ import com.demo.sqlrisk.extractor.xml.XmlFragmentIndex;
 import com.demo.sqlrisk.model.ExtractedStatement;
 import com.demo.sqlrisk.model.Mode;
 import com.demo.sqlrisk.model.SkippedItem;
+import com.demo.sqlrisk.util.Diagnostics;
 import com.demo.sqlrisk.util.JavaSourceIndex;
 
 import java.util.ArrayList;
@@ -21,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * P3 提取编排（详细设计 §9.1，core 内调度逻辑的独立封装）：
@@ -37,12 +39,6 @@ public final class ExtractionService {
     private ExtractionService() {
     }
 
-    /**
-     * @param mode     运行模式
-     * @param changeSet DIFF 模式的差异（FULL 模式为 null）
-     * @param xmlFiles  提交树内全部 xml 候选（索引与提取来源）
-     * @param javaFiles 提交树内全部 java 候选
-     */
     /** 兼容入口：等价 {@code run(...).result()}。 */
     public static ExtractResult extract(Mode mode, ChangeSet changeSet,
                                         List<CandidateFile> xmlFiles, List<CandidateFile> javaFiles,
@@ -50,7 +46,14 @@ public final class ExtractionService {
         return run(mode, changeSet, xmlFiles, javaFiles, config).result();
     }
 
-    /** 提取编排并返回解析所需上下文（片段索引/XML 内容/实体索引，M6 起 P5/P6 复用）。 */
+    /**
+     * 提取编排并返回解析所需上下文（片段索引/XML 内容/实体索引，M6 起 P5/P6 复用）。
+     *
+     * @param mode      运行模式
+     * @param changeSet DIFF 模式的差异（FULL 模式为 null）
+     * @param xmlFiles  提交树内全部 xml 候选（索引与提取来源）
+     * @param javaFiles 提交树内全部 java 候选
+     */
     public static ExtractionOutput run(Mode mode, ChangeSet changeSet,
                                        List<CandidateFile> xmlFiles, List<CandidateFile> javaFiles,
                                        AppConfig config) {
@@ -64,10 +67,10 @@ public final class ExtractionService {
         List<SkippedItem> skipped = new ArrayList<SkippedItem>();
 
         // 索引期解析失败的 XML 文件 → SKIP（不静默）
-        for (String failedFile : xmlIndex.parseFailedFiles()) {
-            skipped.add(new SkippedItem(null, failedFile, 0,
-                    SkippedItem.Kind.PARSE_FAILED, "解析失败：XML 结构错误"));
-        }
+        skipped.addAll(xmlIndex.parseFailedFiles().stream()
+                .map(failedFile -> new SkippedItem(null, failedFile, 0,
+                        SkippedItem.Kind.PARSE_FAILED, "解析失败：XML 结构错误"))
+                .collect(Collectors.toList()));
 
         // XML 语句（选择驱动）
         List<StatementSelection> selections = mode == Mode.FULL
@@ -81,24 +84,8 @@ public final class ExtractionService {
         AnnotationSqlExtractor annotationExtractor = new AnnotationSqlExtractor();
         LambdaSqlExtractor lambdaExtractor = new LambdaSqlExtractor();
         for (CandidateFile file : javaFiles) {
-            CandidateFile target = file;
-            if (mode == Mode.DIFF) {
-                Optional<FileChange> change = changeSet.file(file.path());
-                if (!change.isPresent()) {
-                    continue;
-                }
-                target = CandidateFile.of(file.path(), file.content(), change.get().type(), change.get());
-            }
-            if (annotationExtractor.supports(target)) {
-                ExtractResult result = annotationExtractor.extract(target, ctx);
-                statements.addAll(result.statements());
-                skipped.addAll(result.skipped());
-            }
-            if (lambdaExtractor.supports(target)) {
-                ExtractResult result = lambdaExtractor.extract(target, ctx);
-                statements.addAll(result.statements());
-                skipped.addAll(result.skipped());
-            }
+            targetFile(file, mode, changeSet).ifPresent(target -> extractFromJava(target, ctx,
+                    annotationExtractor, lambdaExtractor, statements, skipped));
         }
 
         // 去重（statementId 保留首个）+ 确定性排序
@@ -107,7 +94,7 @@ public final class ExtractionService {
             if (!byId.containsKey(statement.statementId())) {
                 byId.put(statement.statementId(), statement);
             } else {
-                System.err.println("[警告] 重复 statementId，保留首个: " + statement.statementId());
+                Diagnostics.warn("[警告] 重复 statementId，保留首个: " + statement.statementId());
             }
         }
         List<ExtractedStatement> ordered = new ArrayList<ExtractedStatement>(byId.values());
@@ -116,6 +103,35 @@ public final class ExtractionService {
                 .thenComparing(ExtractedStatement::statementId));
         return new ExtractionOutput(new ExtractResult(ordered, skipped),
                 xmlIndex, contents(xmlFiles), entityIndex);
+    }
+
+    /** DIFF 模式仅保留变更文件；FULL 模式原样返回。 */
+    private static Optional<CandidateFile> targetFile(CandidateFile file, Mode mode, ChangeSet changeSet) {
+        if (mode != Mode.DIFF) {
+            return Optional.of(file);
+        }
+        Optional<FileChange> change = changeSet.file(file.path());
+        if (!change.isPresent()) {
+            return Optional.empty();
+        }
+        return Optional.of(CandidateFile.of(file.path(), file.content(), change.get().type(), change.get()));
+    }
+
+    /** 单 Java 文件的注解与 Lambda 语句提取（各自支持判定后提取）。 */
+    private static void extractFromJava(CandidateFile target, ExtractContext ctx,
+                                        AnnotationSqlExtractor annotationExtractor,
+                                        LambdaSqlExtractor lambdaExtractor,
+                                        List<ExtractedStatement> statements, List<SkippedItem> skipped) {
+        if (annotationExtractor.supports(target)) {
+            ExtractResult result = annotationExtractor.extract(target, ctx);
+            statements.addAll(result.statements());
+            skipped.addAll(result.skipped());
+        }
+        if (lambdaExtractor.supports(target)) {
+            ExtractResult result = lambdaExtractor.extract(target, ctx);
+            statements.addAll(result.statements());
+            skipped.addAll(result.skipped());
+        }
     }
 
     private static Map<String, String> contents(List<CandidateFile> files) {

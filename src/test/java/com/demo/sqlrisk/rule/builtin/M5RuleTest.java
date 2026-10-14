@@ -31,8 +31,8 @@ class M5RuleTest {
 
     @Test
     void comma_join_without_cross_table_link_fires() {
-        assertTrue(rule.check(RuleTestSupport.ctx(
-                "SELECT * FROM a, b WHERE a.id = 1")).size() == 1);
+        assertEquals(1, rule.check(RuleTestSupport.ctx(
+                "SELECT * FROM a, b WHERE a.id = 1")).size());
     }
 
     @Test

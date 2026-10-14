@@ -19,6 +19,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.Function;
 
 /**
  * XML 片段与语句站点索引（详细设计 §9.3）：对全仓 mapper.xml 单趟 SAX 构建。
@@ -211,79 +212,23 @@ public final class XmlFragmentIndex {
 
         List<CandidateFile> sorted = new ArrayList<CandidateFile>(xmlFiles);
         Collections.sort(sorted, Comparator.comparing(CandidateFile::path));
-
         for (CandidateFile file : sorted) {
-            if (!MapperXmlParser.looksLikeMapper(file.content())) {
-                continue;
-            }
-            IndexHandler handler = new IndexHandler(file.path());
-            try {
-                MapperXmlParser.parse(file.content(), handler);
-            } catch (MapperXmlParser.MapperXmlParseException e) {
-                failed.add(file.path()); // 该文件数据整体丢弃（隔离），不作为提取来源
-                continue;
-            }
-            for (FragmentDef def : handler.fragments) {
-                if (!fragments.containsKey(def.key())) {
-                    fragments.put(def.key(), def);
-                }
-            }
-            for (StatementSite site : handler.statements) {
-                if (!statements.containsKey(site.key())) {
-                    statements.put(site.key(), site);
-                }
-            }
-            rawIncludes.addAll(handler.includes);
+            parseFile(file, fragments, statements, rawIncludes, failed);
         }
 
         // 两阶段：全部片段已知后解析 refid
         Map<String, List<IncludeSite>> references = new TreeMap<String, List<IncludeSite>>();
         List<IncludeSite> unresolved = new ArrayList<IncludeSite>();
         for (RawInclude raw : rawIncludes) {
-            if (raw.owner == null) {
-                continue; // include 出现在无效位置（不在语句/片段内）：忽略
-            }
-            String resolved = resolveRefid(raw.refidRaw, raw.ownerNamespace, fragments.keySet());
-            IncludeSite site = new IncludeSite(raw.file, raw.line, raw.refidRaw, resolved,
-                    raw.owner.kind, raw.owner.key);
-            if (resolved == null) {
-                unresolved.add(site);
-            } else {
-                List<IncludeSite> list = references.get(resolved);
-                if (list == null) {
-                    list = new ArrayList<IncludeSite>();
-                    references.put(resolved, list);
-                }
-                list.add(site);
-            }
+            resolveInclude(raw, fragments, references, unresolved);
         }
 
-        Map<String, List<StatementSite>> statementsByFile = new LinkedHashMap<String, List<StatementSite>>();
-        for (StatementSite site : statements.values()) {
-            List<StatementSite> list = statementsByFile.get(site.file());
-            if (list == null) {
-                list = new ArrayList<StatementSite>();
-                statementsByFile.put(site.file(), list);
-            }
-            list.add(site);
-        }
-        Map<String, List<FragmentDef>> fragmentsByFile = new LinkedHashMap<String, List<FragmentDef>>();
-        for (FragmentDef def : fragments.values()) {
-            List<FragmentDef> list = fragmentsByFile.get(def.file());
-            if (list == null) {
-                list = new ArrayList<FragmentDef>();
-                fragmentsByFile.put(def.file(), list);
-            }
-            list.add(def);
-        }
-        Comparator<StatementSite> byLine = Comparator.comparingInt(StatementSite::startLine);
-        for (List<StatementSite> list : statementsByFile.values()) {
-            Collections.sort(list, byLine);
-        }
-        Comparator<FragmentDef> fragByLine = Comparator.comparingInt(FragmentDef::startLine);
-        for (List<FragmentDef> list : fragmentsByFile.values()) {
-            Collections.sort(list, fragByLine);
-        }
+        Map<String, List<StatementSite>> statementsByFile =
+                groupByFile(statements.values(), StatementSite::file);
+        Map<String, List<FragmentDef>> fragmentsByFile =
+                groupByFile(fragments.values(), FragmentDef::file);
+        sortGroups(statementsByFile, Comparator.comparingInt(StatementSite::startLine));
+        sortGroups(fragmentsByFile, Comparator.comparingInt(FragmentDef::startLine));
 
         return new XmlFragmentIndex(
                 Collections.unmodifiableMap(fragments),
@@ -293,6 +238,75 @@ public final class XmlFragmentIndex {
                 Collections.unmodifiableMap(fragmentsByFile),
                 Collections.unmodifiableList(failed),
                 Collections.unmodifiableList(unresolved));
+    }
+
+    /** 单文件解析并入：非 mapper 跳过；解析失败整体丢弃（记 failed）；同名 key 首见优先。 */
+    private static void parseFile(CandidateFile file, Map<String, FragmentDef> fragments,
+                                  Map<String, StatementSite> statements,
+                                  List<RawInclude> rawIncludes, List<String> failed) {
+        if (!MapperXmlParser.looksLikeMapper(file.content())) {
+            return;
+        }
+        IndexHandler handler = new IndexHandler(file.path());
+        try {
+            MapperXmlParser.parse(file.content(), handler);
+        } catch (MapperXmlParser.MapperXmlParseException e) {
+            failed.add(file.path()); // 该文件数据整体丢弃（隔离），不作为提取来源
+            return;
+        }
+        for (FragmentDef def : handler.fragments) {
+            if (!fragments.containsKey(def.key())) {
+                fragments.put(def.key(), def);
+            }
+        }
+        for (StatementSite site : handler.statements) {
+            if (!statements.containsKey(site.key())) {
+                statements.put(site.key(), site);
+            }
+        }
+        rawIncludes.addAll(handler.includes);
+    }
+
+    /** 单 include 引用点解析：无效位置忽略；refid 未解析 → unresolved，否则入 references。 */
+    private static void resolveInclude(RawInclude raw, Map<String, FragmentDef> fragments,
+                                       Map<String, List<IncludeSite>> references,
+                                       List<IncludeSite> unresolved) {
+        if (raw.owner == null) {
+            return; // include 出现在无效位置（不在语句/片段内）：忽略
+        }
+        String resolved = resolveRefid(raw.refidRaw, raw.ownerNamespace, fragments.keySet());
+        IncludeSite site = new IncludeSite(raw.file, raw.line, raw.refidRaw, resolved,
+                raw.owner.kind, raw.owner.key);
+        if (resolved == null) {
+            unresolved.add(site);
+            return;
+        }
+        List<IncludeSite> list = references.get(resolved);
+        if (list == null) {
+            list = new ArrayList<IncludeSite>();
+            references.put(resolved, list);
+        }
+        list.add(site);
+    }
+
+    private static <T> Map<String, List<T>> groupByFile(Collection<T> items, Function<T, String> fileOf) {
+        Map<String, List<T>> byFile = new LinkedHashMap<String, List<T>>();
+        for (T item : items) {
+            String file = fileOf.apply(item);
+            List<T> list = byFile.get(file);
+            if (list == null) {
+                list = new ArrayList<T>();
+                byFile.put(file, list);
+            }
+            list.add(item);
+        }
+        return byFile;
+    }
+
+    private static <T> void sortGroups(Map<String, List<T>> groups, Comparator<T> comparator) {
+        for (List<T> list : groups.values()) {
+            Collections.sort(list, comparator);
+        }
     }
 
     /** refid 规范化：含 '.' → 拆出 namespace 前缀；裸 id → 本 namespace；均需在片段表中存在。 */
@@ -355,34 +369,32 @@ public final class XmlFragmentIndex {
     public Map<String, String> closureOf(Set<String> changedFragmentKeys) {
         Map<String, String> affected = new TreeMap<String, String>();
         Deque<String[]> queue = new ArrayDeque<String[]>(); // [当前片段, 根因种子]
-        for (String seed : new TreeSet<String>(changedFragmentKeys)) {
-            queue.add(new String[]{seed, seed});
-        }
+        new TreeSet<String>(changedFragmentKeys).forEach(seed -> queue.add(new String[]{seed, seed}));
         Set<String> visited = new HashSet<String>();
         while (!queue.isEmpty()) {
             String[] entry = queue.poll();
-            String fragmentKey = entry[0];
-            String seed = entry[1];
-            if (!visited.add(fragmentKey)) {
-                continue;
-            }
-            List<IncludeSite> sites = references.get(fragmentKey);
-            if (sites == null) {
-                continue;
-            }
-            List<IncludeSite> sortedSites = new ArrayList<IncludeSite>(sites);
-            Collections.sort(sortedSites, Comparator.comparing(IncludeSite::file).thenComparingInt(IncludeSite::line));
-            for (IncludeSite site : sortedSites) {
-                if (site.ownerKind() == IncludeSite.OwnerKind.STATEMENT) {
-                    if (!affected.containsKey(site.ownerKey())) {
-                        affected.put(site.ownerKey(), seed); // 来源 = 根因变更片段
-                    }
-                } else {
-                    queue.add(new String[]{site.ownerKey(), seed}); // 片段 → 上级片段（传递传播）
-                }
+            List<IncludeSite> sites = references.get(entry[0]);
+            if (visited.add(entry[0]) && sites != null) {
+                expandSites(sites, entry[1], affected, queue);
             }
         }
         return affected;
+    }
+
+    /** 展开单片段的反向引用点：语句 → 记录根因；片段 → 入队（传递传播）。 */
+    private static void expandSites(List<IncludeSite> sites, String seed,
+                                    Map<String, String> affected, Deque<String[]> queue) {
+        List<IncludeSite> sortedSites = new ArrayList<IncludeSite>(sites);
+        Collections.sort(sortedSites, Comparator.comparing(IncludeSite::file).thenComparingInt(IncludeSite::line));
+        for (IncludeSite site : sortedSites) {
+            if (site.ownerKind() == IncludeSite.OwnerKind.STATEMENT) {
+                if (!affected.containsKey(site.ownerKey())) {
+                    affected.put(site.ownerKey(), seed); // 来源 = 根因变更片段
+                }
+            } else {
+                queue.add(new String[]{site.ownerKey(), seed}); // 片段 → 上级片段（传递传播）
+            }
+        }
     }
 
     // ---------- 单趟 SAX 收集 ----------
@@ -446,31 +458,35 @@ public final class XmlFragmentIndex {
                 return;
             }
             if (STATEMENT_TAGS.contains(qName)) {
-                String id = attrs.getValue("id");
-                if (id != null && !id.trim().isEmpty()) {
-                    push(qName, K_STATEMENT, namespace + SEP_STATEMENT + id.trim(), line);
-                } else {
-                    push(qName, K_OTHER, null, line);
-                }
+                pushNamed(qName, K_STATEMENT, SEP_STATEMENT, attrs, line);
                 return;
             }
             if ("sql".equals(qName)) {
-                String id = attrs.getValue("id");
-                if (id != null && !id.trim().isEmpty()) {
-                    push(qName, K_FRAGMENT, namespace + SEP_FRAGMENT + id.trim(), line);
-                } else {
-                    push(qName, K_OTHER, null, line);
-                }
+                pushNamed(qName, K_FRAGMENT, SEP_FRAGMENT, attrs, line);
                 return;
             }
             if ("include".equals(qName)) {
-                String refid = attrs.getValue("refid");
-                includes.add(new RawInclude(file, line, refid == null ? "" : refid.trim(),
-                        namespace, currentOwner()));
+                registerInclude(attrs, line);
                 push(qName, K_OTHER, null, line);
                 return;
             }
             push(qName, K_OTHER, null, line);
+        }
+
+        /** 语句/片段标签：{@code id} 非空 → 携带 key 入栈；否则按普通标签。 */
+        private void pushNamed(String tag, int kind, char separator, Attributes attrs, int line) {
+            String id = attrs.getValue("id");
+            if (id == null || id.trim().isEmpty()) {
+                push(tag, K_OTHER, null, line);
+                return;
+            }
+            push(tag, kind, namespace + separator + id.trim(), line);
+        }
+
+        private void registerInclude(Attributes attrs, int line) {
+            String refid = attrs.getValue("refid");
+            includes.add(new RawInclude(file, line, refid == null ? "" : refid.trim(),
+                    namespace, currentOwner()));
         }
 
         @Override

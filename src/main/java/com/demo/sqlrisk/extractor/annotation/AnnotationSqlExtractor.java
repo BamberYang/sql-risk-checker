@@ -11,7 +11,6 @@ import com.demo.sqlrisk.model.ChangeType;
 import com.demo.sqlrisk.model.ExtractedStatement;
 import com.demo.sqlrisk.model.SkippedItem;
 import com.demo.sqlrisk.model.StatementSource;
-import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
@@ -23,7 +22,6 @@ import com.github.javaparser.ast.expr.MemberValuePair;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -72,52 +70,71 @@ public final class AnnotationSqlExtractor implements SqlSourceExtractor {
                     Collections.singletonList(new SkippedItem(null, file.path(), 0,
                             SkippedItem.Kind.PARSE_FAILED, "解析失败：Java 源码无法解析")));
         }
-        JavaConstantResolver constantResolver =
-                new JavaConstantResolver(ctx == null ? null : ctx.sourceIndex());
-        ProviderMethodResolver providerResolver =
-                new ProviderMethodResolver(ctx == null ? null : ctx.sourceIndex());
+        return new FileSession(file, cu, ctx).run();
+    }
 
-        List<ExtractedStatement> statements = new ArrayList<ExtractedStatement>();
-        List<SkippedItem> skipped = new ArrayList<SkippedItem>();
-        String pkg = cu.getPackageDeclaration().map(pd -> pd.getNameAsString()).orElse("");
+    /** 单文件提取会话：解析器与产物收集的状态载体（避免方法参数膨胀）。 */
+    private static final class FileSession {
 
-        for (TypeDeclaration<?> type : cu.getTypes()) {
-            String typeFqn = pkg.isEmpty() ? type.getNameAsString() : pkg + "." + type.getNameAsString();
-            for (MethodDeclaration method : type.getMethods()) {
-                AnnotationExpr annotation = findTargetAnnotation(method);
-                if (annotation == null) {
-                    continue;
-                }
-                Optional<ChangeType> change = classify(file, method);
-                if (!change.isPresent()) {
-                    continue;
-                }
-                int line = method.getRange().map(r -> r.begin.line).orElse(0);
-                String statementId = typeFqn + "." + method.getNameAsString();
-                boolean provider = Boolean.TRUE.equals(TARGET_ANNOTATIONS.get(annotation.getName().getIdentifier()));
+        private final CandidateFile file;
+        private final CompilationUnit cu;
+        private final JavaConstantResolver constantResolver;
+        private final ProviderMethodResolver providerResolver;
+        private final List<ExtractedStatement> statements = new ArrayList<ExtractedStatement>();
+        private final List<SkippedItem> skipped = new ArrayList<SkippedItem>();
+        private final String pkg;
 
-                String sqlText = provider
-                        ? resolveProvider(annotation, cu, providerResolver)
-                        : resolveAnnotationValue(annotation, cu, constantResolver);
-                if (sqlText == null) {
-                    skipped.add(new SkippedItem(statementId, file.path(), line,
-                            SkippedItem.Kind.UNSUPPORTED_CARRIER,
-                            provider ? "无法静态解析 Provider 方法" : "无法静态解析注解值（非常量表达式）"));
-                    continue;
-                }
-                Object carrier = isScript(sqlText)
-                        ? new DynamicXmlText(sqlText, typeFqn)
-                        : new AnnotationSqlText(sqlText);
-                // Wrapper SQL 段识别（§9.5-6，v1.4）：纯文本注解中 ${ew.customSqlSegment} 类占位符
-                // 根名解析到 Wrapper 家族参数 → 记录，供解析代换（§10.6）与 M8 排除（§11.4）
-                List<String> wrapperSqlParams = carrier instanceof AnnotationSqlText
-                        ? WrapperParamResolver.resolve(method)
-                        : Collections.<String>emptyList();
-                statements.add(new ExtractedStatement(statementId, StatementSource.ANNOTATION,
-                        change.get(), file.path(), line, sqlText, carrier, null, wrapperSqlParams));
-            }
+        FileSession(CandidateFile file, CompilationUnit cu, ExtractContext ctx) {
+            this.file = file;
+            this.cu = cu;
+            this.constantResolver = new JavaConstantResolver(ctx == null ? null : ctx.sourceIndex());
+            this.providerResolver = new ProviderMethodResolver(ctx == null ? null : ctx.sourceIndex());
+            this.pkg = cu.getPackageDeclaration().map(pd -> pd.getNameAsString()).orElse("");
         }
-        return new ExtractResult(statements, skipped);
+
+        ExtractResult run() {
+            for (TypeDeclaration<?> type : cu.getTypes()) {
+                String typeFqn = pkg.isEmpty() ? type.getNameAsString() : pkg + "." + type.getNameAsString();
+                for (MethodDeclaration method : type.getMethods()) {
+                    extractMethod(typeFqn, method);
+                }
+            }
+            return new ExtractResult(statements, skipped);
+        }
+
+        /** 单方法：命中目标注解且行级判定通过 → 提取语句，否则忽略。 */
+        private void extractMethod(String typeFqn, MethodDeclaration method) {
+            AnnotationExpr annotation = findTargetAnnotation(method);
+            if (annotation == null) {
+                return;
+            }
+            Optional<ChangeType> change = classify(file, method);
+            if (!change.isPresent()) {
+                return;
+            }
+            int line = method.getRange().map(r -> r.begin.line).orElse(0);
+            String statementId = typeFqn + "." + method.getNameAsString();
+            boolean provider = Boolean.TRUE.equals(TARGET_ANNOTATIONS.get(annotation.getName().getIdentifier()));
+            String sqlText = provider
+                    ? resolveProvider(annotation, cu, providerResolver)
+                    : resolveAnnotationValue(annotation, cu, constantResolver);
+            if (sqlText == null) {
+                skipped.add(new SkippedItem(statementId, file.path(), line,
+                        SkippedItem.Kind.UNSUPPORTED_CARRIER,
+                        provider ? "无法静态解析 Provider 方法" : "无法静态解析注解值（非常量表达式）"));
+                return;
+            }
+            Object carrier = isScript(sqlText)
+                    ? new DynamicXmlText(sqlText, typeFqn)
+                    : new AnnotationSqlText(sqlText);
+            // Wrapper SQL 段识别（§9.5-6，v1.4）：纯文本注解中 ${ew.customSqlSegment} 类占位符
+            // 根名解析到 Wrapper 家族参数 → 记录，供解析代换（§10.6）与 M8 排除（§11.4）
+            List<String> wrapperSqlParams = carrier instanceof AnnotationSqlText
+                    ? WrapperParamResolver.resolve(method)
+                    : Collections.<String>emptyList();
+            statements.add(new ExtractedStatement(statementId, StatementSource.ANNOTATION,
+                    change.get(), file.path(), line, sqlText, carrier, null, wrapperSqlParams));
+        }
     }
 
     // ---------- 内部 ----------
@@ -149,16 +166,7 @@ public final class AnnotationSqlExtractor implements SqlSourceExtractor {
     /** 非 Provider 注解值：单值/数组/常量引用。 */
     private static String resolveAnnotationValue(AnnotationExpr annotation, CompilationUnit cu,
                                                  JavaConstantResolver constantResolver) {
-        Expression value = null;
-        if (annotation.isSingleMemberAnnotationExpr()) {
-            value = annotation.asSingleMemberAnnotationExpr().getMemberValue();
-        } else if (annotation.isNormalAnnotationExpr()) {
-            for (MemberValuePair pair : annotation.asNormalAnnotationExpr().getPairs()) {
-                if ("value".equals(pair.getNameAsString())) {
-                    value = pair.getValue();
-                }
-            }
-        }
+        Expression value = annotationValue(annotation);
         if (value == null) {
             return null;
         }
@@ -166,21 +174,44 @@ public final class AnnotationSqlExtractor implements SqlSourceExtractor {
             return ((StringLiteralExpr) value).asString();
         }
         if (value instanceof ArrayInitializerExpr) {
-            List<String> parts = new ArrayList<String>();
-            for (Expression element : ((ArrayInitializerExpr) value).getValues()) {
-                if (element instanceof StringLiteralExpr) {
-                    parts.add(((StringLiteralExpr) element).asString());
-                } else {
-                    Optional<String> resolved = constantResolver.resolve(element, cu);
-                    if (!resolved.isPresent()) {
-                        return null;
-                    }
-                    parts.add(resolved.get());
-                }
-            }
-            return String.join("\n", parts);
+            return joinArray((ArrayInitializerExpr) value, cu, constantResolver);
         }
         return constantResolver.resolve(value, cu).orElse(null);
+    }
+
+    /** 注解 value 表达式（单值成员或 {@code value=} 命名成员）；无 → null。 */
+    private static Expression annotationValue(AnnotationExpr annotation) {
+        if (annotation.isSingleMemberAnnotationExpr()) {
+            return annotation.asSingleMemberAnnotationExpr().getMemberValue();
+        }
+        if (annotation.isNormalAnnotationExpr()) {
+            Expression value = null;
+            for (MemberValuePair pair : annotation.asNormalAnnotationExpr().getPairs()) {
+                if ("value".equals(pair.getNameAsString())) {
+                    value = pair.getValue();
+                }
+            }
+            return value;
+        }
+        return null;
+    }
+
+    /** 数组值：逐元素（字面量/常量）解析并以换行连接；任一元素无法解析 → null。 */
+    private static String joinArray(ArrayInitializerExpr array, CompilationUnit cu,
+                                    JavaConstantResolver constantResolver) {
+        List<String> parts = new ArrayList<String>();
+        for (Expression element : array.getValues()) {
+            if (element instanceof StringLiteralExpr) {
+                parts.add(((StringLiteralExpr) element).asString());
+            } else {
+                Optional<String> resolved = constantResolver.resolve(element, cu);
+                if (!resolved.isPresent()) {
+                    return null;
+                }
+                parts.add(resolved.get());
+            }
+        }
+        return String.join("\n", parts);
     }
 
     /** Provider 形式：type/method 成员静态求值。 */

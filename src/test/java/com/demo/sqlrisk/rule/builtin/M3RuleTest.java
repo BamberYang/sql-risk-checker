@@ -48,7 +48,7 @@ class M3RuleTest {
         StatementMeta meta = StatementMeta.from(new ExtractedStatement("OrderService.java:10",
                 StatementSource.LAMBDA, ChangeType.FULL, "OrderService.java", 10, "raw", "carrier", null));
         RuleContext ctx = new RuleContext(
-                RuleTestSupport.parsedSql("SELECT * FROM t_order WHERE order_no LIKE ?", null, skeleton),
+                RuleTestSupport.parsedSql(null, skeleton),
                 meta, null, null, "raw");
         assertEquals(1, rule.check(ctx).size());
     }

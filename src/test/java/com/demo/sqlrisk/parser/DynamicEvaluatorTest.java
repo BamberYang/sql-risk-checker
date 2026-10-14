@@ -160,18 +160,20 @@ class DynamicEvaluatorTest {
         DynamicEvalContext ctx = new DynamicEvalContext(
                 XmlFragmentIndex.build(Arrays.asList(CandidateFile.of("mapper/cycle.xml", cycle))), contents);
 
+        DynamicXmlText text = new DynamicXmlText(
+                "<select id=\"s\"><include refid=\"c.a\"/></select>", "c");
         DynamicEvaluationException e = assertThrows(DynamicEvaluationException.class,
-                () -> DynamicEvaluator.evaluate(new DynamicXmlText(
-                        "<select id=\"s\"><include refid=\"c.a\"/></select>", "c"), ctx));
+                () -> DynamicEvaluator.evaluate(text, ctx));
         assertTrue(e.getMessage().contains("深度"), "循环引用由深度上限拦截");
     }
 
     @Test
     void unresolved_include_fails() {
+        DynamicXmlText text = new DynamicXmlText(
+                "<select id=\"s\"><include refid=\"missing.frag\"/></select>", "ns");
+        DynamicEvalContext emptyCtx = new DynamicEvalContext(null, null);
         DynamicEvaluationException e = assertThrows(DynamicEvaluationException.class,
-                () -> DynamicEvaluator.evaluate(new DynamicXmlText(
-                        "<select id=\"s\"><include refid=\"missing.frag\"/></select>", "ns"),
-                        new DynamicEvalContext(null, null)));
+                () -> DynamicEvaluator.evaluate(text, emptyCtx));
         assertTrue(e.getMessage().contains("无法展开") || e.getMessage().contains("无法解析"));
     }
 

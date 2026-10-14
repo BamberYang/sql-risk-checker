@@ -68,7 +68,7 @@ class JdbcMetadataProviderTest {
         JdbcMetadataProvider provider = JdbcMetadataProvider.load(setting(url));
         assertTrue(provider.find("T_ORDER").isPresent());
         assertTrue(provider.find("t_order").get().field("ID").isPresent());
-        assertTrue(provider.find(null).equals(java.util.Optional.empty()));
+        assertEquals(java.util.Optional.empty(), provider.find(null));
     }
 
     @Test
@@ -95,8 +95,9 @@ class JdbcMetadataProviderTest {
 
     @Test
     void connection_failure_throws_metadata_exception_exit_2() {
+        DataSourceSetting badSetting = setting("jdbc:unknown-subprotocol://127.0.0.1/none");
         MetadataException e = assertThrows(MetadataException.class,
-                () -> JdbcMetadataProvider.load(setting("jdbc:unknown-subprotocol://127.0.0.1/none")));
+                () -> JdbcMetadataProvider.load(badSetting));
         assertEquals(2, e.exitCode());
         assertTrue(e.getMessage().contains("数据库元数据加载失败"), e.getMessage());
         assertFalse(e.getMessage().contains("pwd"), "错误信息不含密码");

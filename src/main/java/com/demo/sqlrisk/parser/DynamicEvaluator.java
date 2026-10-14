@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * 动态 SQL 保守求值（详细设计 §10.2、FR-5、决策 D19/DD-4）：
@@ -31,6 +32,8 @@ import java.util.Optional;
  * </ul>
  */
 public final class DynamicEvaluator {
+
+    private static final String KEYWORD_WHERE = "where";
 
     public static final int MAX_SKELETONS = 8;        // §17
     public static final int INCLUDE_DEPTH_LIMIT = 32; // §17
@@ -93,10 +96,10 @@ public final class DynamicEvaluator {
                     return Collections.singletonList(dropFor(node, DroppedBranch.BranchType.IF, role));
                 case "choose":
                     return evalChoose(node, role, depth);
-                case "where":
-                    return foldWhereSet(node, role, depth, DroppedBranch.Role.CONDITION, true);
+                case KEYWORD_WHERE:
+                    return foldWhereSet(node, depth, DroppedBranch.Role.CONDITION, true);
                 case "set":
-                    return foldWhereSet(node, role, depth, DroppedBranch.Role.SET, false);
+                    return foldWhereSet(node, depth, DroppedBranch.Role.SET, false);
                 case "trim":
                     return evalTrim(node, role, depth);
                 case "foreach":
@@ -149,7 +152,7 @@ public final class DynamicEvaluator {
         }
 
         /** &lt;where&gt;/&lt;set&gt; 折叠：去多余连接词/逗号、空块整体省略。 */
-        private List<Partial> foldWhereSet(DynNode node, DroppedBranch.Role outerRole, int depth,
+        private List<Partial> foldWhereSet(DynNode node, int depth,
                                            DroppedBranch.Role innerRole, boolean where) {
             List<Partial> inner = evalChildren(node, innerRole, depth);
             List<Partial> out = new ArrayList<Partial>(inner.size());
@@ -329,7 +332,7 @@ public final class DynamicEvaluator {
             // 裸 <if>WHERE …</if> 形态（§D19 回写）：片段文本以 WHERE 开头 → 折叠即 WHERE 消失，
             // 归 CONDITION 以驱动 H1/H2/H3 的保守策略附注
             String trimmed = lower.trim();
-            if ("where".equals(trimmed) || (trimmed.startsWith("where") && trimmed.length() > 5
+            if (KEYWORD_WHERE.equals(trimmed) || (trimmed.startsWith(KEYWORD_WHERE) && trimmed.length() > 5
                     && Character.isWhitespace(trimmed.charAt(5)))) {
                 return DroppedBranch.Role.CONDITION;
             }
@@ -433,13 +436,11 @@ public final class DynamicEvaluator {
         }
 
         List<DynNode> childElements(String elementName) {
-            List<DynNode> out = new ArrayList<DynNode>();
-            for (Object child : children) {
-                if (child instanceof DynNode && ((DynNode) child).name.equalsIgnoreCase(elementName)) {
-                    out.add((DynNode) child);
-                }
-            }
-            return out;
+            return children.stream()
+                    .filter(child -> child instanceof DynNode
+                            && ((DynNode) child).name.equalsIgnoreCase(elementName))
+                    .map(child -> (DynNode) child)
+                    .collect(Collectors.toList());
         }
 
         Optional<DynNode> firstChildElement(String elementName) {

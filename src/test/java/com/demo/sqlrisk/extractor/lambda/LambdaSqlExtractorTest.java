@@ -150,6 +150,12 @@ class LambdaSqlExtractorTest {
         assertEquals("Order", conversion.entityTypeName(), "泛型来自转换的接收者构造");
         assertEquals(Collections.singletonList("eq"), callMethods(conversion));
 
+    }
+
+    @Test
+    void full_mode_recognizes_receiver_and_param_wrapper_forms() {
+        List<ExtractedStatement> statements = extractFull().statements();
+
         // 接收者（mapper 泛型反解）
         int receiverLine = lineOf("orderMapper.lambdaQuery()");
         LambdaChainModel receiver = modelAt(statements, receiverLine);
@@ -163,6 +169,7 @@ class LambdaSqlExtractorTest {
         assertEquals(Collections.singletonList("eq"), callMethods(param));
 
         // statementId 规则：文件名(不含路径):行号（不参与白名单）
+        int variableLine = lineOf("new LambdaQueryWrapper<Order>();");
         assertEquals("OrderService.java:" + variableLine,
                 statements.get(indexOfLine(statements, variableLine)).statementId());
     }

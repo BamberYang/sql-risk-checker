@@ -1,6 +1,7 @@
 package com.demo.sqlrisk.report;
 
 import com.demo.sqlrisk.model.Mode;
+import com.demo.sqlrisk.model.ReportModel;
 import com.demo.sqlrisk.testutil.ReportFixtures;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -10,8 +11,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 /** T8.4：报告写出（详细设计 §12.4）：固定文件名、目录自动创建、覆盖写、写失败 exit 2。 */
 class ReportWriterTest {
@@ -45,12 +46,10 @@ class ReportWriterTest {
     void write_failure_throws_report_exception_with_exit_2() throws Exception {
         Path blocker = tempDir.resolve("blocker");
         Files.write(blocker, "not a dir".getBytes(StandardCharsets.UTF_8));
-        try {
-            ReportWriter.write(ReportFixtures.sampleReport(), blocker.toString());
-            fail("应抛出 ReportException");
-        } catch (ReportException e) {
-            assertEquals(2, e.exitCode());
-            assertTrue(e.getMessage().contains("报告写出失败"), e.getMessage());
-        }
+        ReportModel report = ReportFixtures.sampleReport();
+        String blockerPath = blocker.toString();
+        ReportException e = assertThrows(ReportException.class, () -> ReportWriter.write(report, blockerPath));
+        assertEquals(2, e.exitCode());
+        assertTrue(e.getMessage().contains("报告写出失败"), e.getMessage());
     }
 }

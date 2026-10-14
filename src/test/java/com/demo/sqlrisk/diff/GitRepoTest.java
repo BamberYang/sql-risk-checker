@@ -27,14 +27,16 @@ class GitRepoTest {
     @Test
     void open_non_git_directory_fails_with_exit_2() throws Exception {
         Path plain = Files.createDirectories(tempDir.resolve("plain"));
-        DiffException e = assertThrows(DiffException.class, () -> GitRepo.open(plain.toString()));
+        String plainPath = plain.toString();
+        DiffException e = assertThrows(DiffException.class, () -> GitRepo.open(plainPath));
         assertEquals(2, e.exitCode());
         assertTrue(e.getMessage().contains("非 git 仓库"));
     }
 
     @Test
     void open_missing_path_fails() {
-        assertThrows(DiffException.class, () -> GitRepo.open(tempDir.resolve("nope").toString()));
+        String missing = tempDir.resolve("nope").toString();
+        assertThrows(DiffException.class, () -> GitRepo.open(missing));
     }
 
     @Test

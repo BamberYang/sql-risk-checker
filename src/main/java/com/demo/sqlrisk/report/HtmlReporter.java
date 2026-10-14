@@ -2,7 +2,6 @@ package com.demo.sqlrisk.report;
 
 import com.demo.sqlrisk.model.Finding;
 import com.demo.sqlrisk.model.IgnoredItem;
-import com.demo.sqlrisk.model.Mode;
 import com.demo.sqlrisk.model.ReportModel;
 import com.demo.sqlrisk.model.RiskLevel;
 import com.demo.sqlrisk.model.SkippedItem;
@@ -20,6 +19,7 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * HTML 报告（详细设计 §12.5，默认双产出）：单文件、离线自包含（内联 CSS + 原生 JS，无外链），
@@ -29,6 +29,7 @@ import java.util.Set;
 public final class HtmlReporter {
 
     public static final String REPORT_FILE_NAME = "sql_risk_report.html"; // §17
+    private static final String SPAN_END = "</span>";
 
     private HtmlReporter() {
     }
@@ -76,7 +77,7 @@ public final class HtmlReporter {
                         ? "<span class=\"kv\">prod <code>" + escape(abbreviate(report.prodCommit())) + "</code></span>"
                         : "<span class=\"kv\">prod —</span>")
                 .append("<span class=\"kv\">生成时间 ").append(escape(
-                        report.generatedAt().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))).append("</span>")
+                        report.generatedAt().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))).append(SPAN_END)
                 .append("</div>\n</header>\n");
     }
 
@@ -144,14 +145,10 @@ public final class HtmlReporter {
         appendCards(sb, "NONE", "通过", false, filterLevel(report, null));
     }
 
-    private static List<StatementResult> filterLevel(ReportModel report, RiskLevel level) {
-        List<StatementResult> out = new ArrayList<StatementResult>();
-        for (StatementResult result : report.results()) {
-            if (result.level() == level) {
-                out.add(result);
-            }
-        }
-        return out;
+    private static List<StatementResult> filterLevel(ReportModel report, final RiskLevel level) {
+        return report.results().stream()
+                .filter(result -> result.level() == level)
+                .collect(Collectors.toList());
     }
 
     private static void appendCards(StringBuilder sb, String dataLevel, String title, boolean open,
@@ -179,12 +176,12 @@ public final class HtmlReporter {
                 .append("\" data-file=\"").append(escape(result.meta().file())).append("\">\n")
                 .append("<div class=\"card-head\">")
                 .append("<span class=\"badge b-").append(level == null ? "NONE" : level.name()).append("\">")
-                .append(levelLabel(level)).append("</span>")
-                .append("<span class=\"sid\">").append(escape(result.meta().statementId())).append("</span>")
-                .append("<span class=\"tag\">").append(escape(result.meta().source().name())).append("</span>")
-                .append("<span class=\"tag\">").append(escape(result.meta().changeType().name())).append("</span>");
+                .append(levelLabel(level)).append(SPAN_END)
+                .append("<span class=\"sid\">").append(escape(result.meta().statementId())).append(SPAN_END)
+                .append("<span class=\"tag\">").append(escape(result.meta().source().name())).append(SPAN_END)
+                .append("<span class=\"tag\">").append(escape(result.meta().changeType().name())).append(SPAN_END);
         if (result.meta().changedVia() != null) {
-            sb.append("<span class=\"tag via\">via ").append(escape(result.meta().changedVia())).append("</span>");
+            sb.append("<span class=\"tag via\">via ").append(escape(result.meta().changedVia())).append(SPAN_END);
         }
         if (result.uncertain()) {
             sb.append("<span class=\"tag warn\">还原不确定</span>");

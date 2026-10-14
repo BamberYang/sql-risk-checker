@@ -10,8 +10,8 @@ import com.demo.sqlrisk.util.TextUtils;
 
 import java.io.PrintStream;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 控制台摘要（详细设计 §12.2、附录 B 格式）：
@@ -51,13 +51,10 @@ public final class ConsoleReporter {
         }
     }
 
-    private static void printLevelDetail(ReportModel report, RiskLevel level, String title, PrintStream out) {
-        List<StatementResult> levelResults = new ArrayList<StatementResult>();
-        for (StatementResult result : report.results()) {
-            if (result.level() == level) {
-                levelResults.add(result);
-            }
-        }
+    private static void printLevelDetail(ReportModel report, final RiskLevel level, String title, PrintStream out) {
+        List<StatementResult> levelResults = report.results().stream()
+                .filter(result -> result.level() == level)
+                .collect(Collectors.toList());
         if (levelResults.isEmpty()) {
             return;
         }

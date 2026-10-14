@@ -53,7 +53,7 @@ class AnalysisEngineTest {
     }
 
     private RunContext context(String headArg, String prodArg, Path targetDir, String dbUrl) {
-        AppConfig config = ConfigLoader.load(new CliOverrides(null, null, dbUrl, "sa", ""), targetDir.toString());
+        AppConfig config = ConfigLoader.load(new CliOverrides(null, null, dbUrl, "sa", ""));
         return new RunContext(targetDir.toString(), headArg, prodArg, config, ".", false, TestClocks.fixed());
     }
 
@@ -103,16 +103,18 @@ class AnalysisEngineTest {
 
     @Test
     void invalid_prod_commit_fails_with_exit_2() {
-        DiffException e = assertThrows(DiffException.class, () -> new AnalysisEngine(TestClocks.fixed())
-                .execute(context(null, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", repoDir)));
+        AnalysisEngine engine = new AnalysisEngine(TestClocks.fixed());
+        RunContext ctx = context(null, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", repoDir);
+        DiffException e = assertThrows(DiffException.class, () -> engine.execute(ctx));
         assertEquals(2, e.exitCode());
     }
 
     @Test
     void metadata_load_failure_fails_fast_with_exit_2() {
         // v1.8/FR-8：数据库不可用（未知驱动/连接失败）→ MetadataException → exit 2
-        MetadataException e = assertThrows(MetadataException.class, () -> new AnalysisEngine(TestClocks.fixed())
-                .execute(context(null, null, repoDir, "jdbc:unknown-subprotocol://127.0.0.1/none")));
+        AnalysisEngine engine = new AnalysisEngine(TestClocks.fixed());
+        RunContext ctx = context(null, null, repoDir, "jdbc:unknown-subprotocol://127.0.0.1/none");
+        MetadataException e = assertThrows(MetadataException.class, () -> engine.execute(ctx));
         assertEquals(2, e.exitCode());
         assertTrue(e.getMessage().contains("数据库元数据加载失败"), e.getMessage());
     }
@@ -120,8 +122,9 @@ class AnalysisEngineTest {
     @Test
     void non_git_repo_fails_with_exit_2() throws Exception {
         Path plain = Files.createDirectories(tempDir.resolve("plain"));
-        DiffException e = assertThrows(DiffException.class, () -> new AnalysisEngine(TestClocks.fixed())
-                .execute(context(null, null, plain)));
+        AnalysisEngine engine = new AnalysisEngine(TestClocks.fixed());
+        RunContext ctx = context(null, null, plain);
+        DiffException e = assertThrows(DiffException.class, () -> engine.execute(ctx));
         assertTrue(e.getMessage().contains("非 git 仓库"));
     }
 

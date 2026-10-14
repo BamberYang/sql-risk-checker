@@ -39,7 +39,8 @@ public final class CliArgs {
     public static CliArgs parse(String[] argv) {
         CliArgs args = new CliArgs();
         Set<String> seen = new HashSet<String>();
-        for (int i = 0; i < argv.length; i++) {
+        int i = 0;
+        while (i < argv.length) {
             String token = argv[i];
             if ("--help".equals(token)) {
                 args.helpRequested = true;
@@ -51,6 +52,7 @@ public final class CliArgs {
             seen.add(token);
             if ("--verbose".equals(token)) {
                 args.verbose = true;
+                i++;
                 continue;
             }
             if (REMOVED_OPTIONS.contains(token)) {
@@ -63,35 +65,38 @@ public final class CliArgs {
             if (i + 1 >= argv.length) {
                 throw new CliUsageException("参数缺少值: " + token);
             }
-            String value = argv[++i];
-            if ("--repo".equals(token)) {
-                args.repoPath = value;
-            } else if ("--head-commit".equals(token)) {
-                args.headCommit = value;
-            } else if ("--prod-commit".equals(token)) {
-                args.prodCommit = value;
-            } else if ("--config".equals(token)) {
-                args.configPath = value;
-            } else if ("--output".equals(token)) {
-                args.outputDir = value;
-            } else if ("--dialect".equals(token)) {
-                args.dialect = value;
-            } else if ("--db-url".equals(token)) {
-                args.dbUrl = value;
-            } else if ("--db-username".equals(token)) {
-                args.dbUsername = value;
-            } else if ("--db-password".equals(token)) {
-                args.dbPassword = value;
-            } else if ("--format".equals(token)) {
-                if (!"json".equals(value)) {
-                    throw new CliUsageException("--format 仅支持 json，收到: " + value);
-                }
-            }
+            applyValue(args, token, argv[i + 1]);
+            i += 2;
         }
         if (args.repoPath == null || args.repoPath.trim().isEmpty()) {
             throw new CliUsageException("缺少必填参数 --repo <path>");
         }
         return args;
+    }
+
+    /** 取值参数落位（token 必属 {@link #VALUE_OPTIONS}）。 */
+    private static void applyValue(CliArgs args, String token, String value) {
+        if ("--repo".equals(token)) {
+            args.repoPath = value;
+        } else if ("--head-commit".equals(token)) {
+            args.headCommit = value;
+        } else if ("--prod-commit".equals(token)) {
+            args.prodCommit = value;
+        } else if ("--config".equals(token)) {
+            args.configPath = value;
+        } else if ("--output".equals(token)) {
+            args.outputDir = value;
+        } else if ("--dialect".equals(token)) {
+            args.dialect = value;
+        } else if ("--db-url".equals(token)) {
+            args.dbUrl = value;
+        } else if ("--db-username".equals(token)) {
+            args.dbUsername = value;
+        } else if ("--db-password".equals(token)) {
+            args.dbPassword = value;
+        } else if ("--format".equals(token) && !"json".equals(value)) {
+            throw new CliUsageException("--format 仅支持 json，收到: " + value);
+        }
     }
 
     /** 用法文本（详细设计 附录 B，v1.8）。 */

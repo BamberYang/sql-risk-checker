@@ -224,28 +224,7 @@ public final class QueryFactsBuilder {
             return;
         }
         if (expr instanceof SQLBinaryOpExpr) {
-            SQLBinaryOpExpr binary = (SQLBinaryOpExpr) expr;
-            SQLBinaryOperator op = binary.getOperator();
-            if (op == SQLBinaryOperator.BooleanAnd || op == SQLBinaryOperator.BooleanOr) {
-                recordLeaf(binary.getLeft(), branchColumns, b);
-                recordLeaf(binary.getRight(), branchColumns, b);
-                return;
-            }
-            recordColumns(binary.getLeft(), b.predicateColumnsByTable, b, branchColumns);
-            recordColumns(binary.getRight(), b.predicateColumnsByTable, b, branchColumns);
-            if (isComparison(op)) {
-                if (containsFunctionWithColumn(binary.getLeft())
-                        || containsFunctionWithColumn(binary.getRight())) {
-                    b.hasFunctionWrappedColumn = true;
-                }
-                if ((op == SQLBinaryOperator.Like || op == SQLBinaryOperator.NotLike)
-                        && binary.getRight() instanceof SQLCharExpr
-                        && ((SQLCharExpr) binary.getRight()).getText().startsWith("%")) {
-                    b.hasLeadingWildcardLike = true;
-                }
-                checkImplicitCast(binary.getLeft(), binary.getRight(), b);
-                checkImplicitCast(binary.getRight(), binary.getLeft(), b);
-            }
+            recordBinaryLeaf((SQLBinaryOpExpr) expr, branchColumns, b);
             return;
         }
         if (expr instanceof SQLInListExpr) {
@@ -265,6 +244,38 @@ public final class QueryFactsBuilder {
             return; // 子查询隔离
         }
         recordColumns(expr, b.predicateColumnsByTable, b, branchColumns);
+    }
+
+    /** 二元叶：布尔连接递归展开；比较运算符 → 函数包裹 / 前导通配符 / 隐式转换判定。 */
+    private static void recordBinaryLeaf(SQLBinaryOpExpr binary, Set<String> branchColumns, Builder b) {
+        SQLBinaryOperator op = binary.getOperator();
+        if (op == SQLBinaryOperator.BooleanAnd || op == SQLBinaryOperator.BooleanOr) {
+            recordLeaf(binary.getLeft(), branchColumns, b);
+            recordLeaf(binary.getRight(), branchColumns, b);
+            return;
+        }
+        recordColumns(binary.getLeft(), b.predicateColumnsByTable, b, branchColumns);
+        recordColumns(binary.getRight(), b.predicateColumnsByTable, b, branchColumns);
+        if (!isComparison(op)) {
+            return;
+        }
+        if (containsFunctionWithColumn(binary.getLeft())
+                || containsFunctionWithColumn(binary.getRight())) {
+            b.hasFunctionWrappedColumn = true;
+        }
+        if (isLeadingWildcardLike(binary)) {
+            b.hasLeadingWildcardLike = true;
+        }
+        checkImplicitCast(binary.getLeft(), binary.getRight(), b);
+        checkImplicitCast(binary.getRight(), binary.getLeft(), b);
+    }
+
+    /** LIKE/NOT LIKE 且右侧字面量以 % 开头（前导通配符，M3 判定输入）。 */
+    private static boolean isLeadingWildcardLike(SQLBinaryOpExpr binary) {
+        SQLBinaryOperator op = binary.getOperator();
+        return (op == SQLBinaryOperator.Like || op == SQLBinaryOperator.NotLike)
+                && binary.getRight() instanceof SQLCharExpr
+                && ((SQLCharExpr) binary.getRight()).getText().startsWith("%");
     }
 
     private static boolean isComparison(SQLBinaryOperator op) {

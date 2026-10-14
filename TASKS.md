@@ -1,7 +1,7 @@
 # 开发任务拆解（TASKS）
 
 > 依据：详细设计 v1.1、概要设计 v1.7。规模估算 S/M/L 仅用于排序参考（S≈半天内，M≈1~2 天，L≈3 天+）。
-> **完成定义（DoD）**：`mvn -o clean verify` 通过；任务对应单测齐备（规则类须含 正例/反例/边界 三类）；不破坏既有黄金用例；勾选本文件并标注日期。
+> **完成定义（DoD）**：`mvn -o clean verify` 通过；任务对应单测齐备（规则类须含 正例/反例/边界 三类）；不破坏既有黄金用例；**代码满足 Sonar 代码规范（需求方扫描验证，新代码零新增违规；设计性例外须登记豁免并附理由）**；勾选本文件并标注日期。
 > 开发期每完成一个任务建议一个小 commit（`feat(模块): …` / `test(模块): …` / `docs: …`）。
 
 ## 里程碑总览
@@ -130,7 +130,7 @@
 - [x] **T10.4**（2026-10-15）黄金夹具迁移与错误形态更新（M，**原 T12.1/T12.2 并入**：M10 删除 `JsonMetadataProvider` 后，用例 `metadata.json` 依赖必须同步迁移）：14 用例 `metadata.json` → `schema.sql`（H2 内存库建 schema → `JdbcMetadataProvider` 加载）；`GoldenCase`/`AnalysisEngineIT` 管线更新；expected 应零漂移（逐条人工复核）；ac09 的"元数据缺失/格式错误"改为"连接失败（非法 url）/datasource.url 缺失/方言未支持"
 - 验收（2026-10-15 实测）：`JdbcMetadataProviderTest` 6 用例（H2：类型归一 VARCHAR/INT 别名、索引列序、快照独立于连接关闭、失败 exit 2）；Config/CliArgs/Engine/Main 测试全部按新语义更新；**14 个黄金用例 expected 零漂移**（H2 元数据与旧 JSON 语义等价验证）；**306/306 全绿**；离线 `mvn -o clean verify` 通过（在线校准一次：MySQL Connector/J 8.0.33 + H2 2.2.224 后恢复离线）；shaded jar 21.2MB（含驱动）
   - 说明：`--metadata`/`metadata_file`/`JsonMetadataProvider`/`examples/sql-risk-metadata.example.json` 全部移除（`metadata_file` 出现时告警忽略）；ac09 错误形态改为"连接失败（未知驱动）/datasource.url 未配置/方言未支持"
-  - 注：真实 MySQL 连库验证需需求方提供连接信息（安排在 M12 回归时统一执行）
+  - 注：真实 MySQL 连库验证需需求方提供连接信息（安排在 M12 回归时统一执行；已于 2026-10-14 补验完成，见 T12.1）
 
 ## M11 方言 SPI（MySQL 基线 + 扩展机制，FR-9）✅ 2026-10-15（需求方已确认）
 
@@ -140,9 +140,14 @@
   - 扩展路径（契约）：实现 `SqlDialect` → `META-INF/services` 注册 → 配置 `dialect: <name>` 即可用；未实现值报错不降级
   - 回写清单（M12）：概设 §3.3 依赖图新增 `config → parser`（方言取值校验经 `SqlDialects.supportedNames()`）
 
-## M12 端到端回归与收尾 ✅ 2026-10-15（需求方已确认；T12.1 真实 MySQL 验证按需求方决定暂缓，连接信息后补可随时执行）
+## M12 端到端回归与收尾 ✅ 2026-10-15（需求方已确认；T12.1 真实 MySQL 验证于 2026-10-14 补验完成）
 
-- [ ] **T12.1** 真实 MySQL 连库验证（暂缓：需求方在 M10 确认时明确"mysql 连接先不验证"；连接信息后补可随时执行，属可选验收）
+- [x] **T12.1**（2026-10-14 补验完成）真实 MySQL 连库验证——需求方提供连接信息（`default-config.yaml`）后以 `union-order-app` 真实仓库（`dec908da`，FULL 模式）端到端执行：
+  - **连接与一次加载**：`[元数据] jdbc:mysql://127.0.0.1:3306/union_order 加载 9 张表（一次加载，连接已关闭）`，加载日志全流程仅出现 1 次（AC-12 证据）；库内 9 张表与 `init.sql` 表清单一致
+  - **元数据来自库内实时结构（铁证）**：库内 `cash_order.uid` 索引为文件快照所无 → `WHERE uid = ?` 语句**未命中 M1**（若用文件快照会误报）；反方向：M1 命中 12 条逐条对照库内索引首列全部属实，索引列负例 12 例（cash_no/uid/credit_id/code/order_no）零误报
+  - **保守语义**：`quota_change_record`/`quota_order` 不在库快照中 → 命中"表不在元数据中，默认无索引"（D13）
+  - **失败路径**：错误密码（CLI 优先于 yaml）→ exit 2，错误信息含 URL 不含密码（脱敏）；**密码零泄漏**：报告/日志均不含密码串
+  - **报告与确定性**：JSON 49.6KB + HTML 57.9KB 双产出；口径恒等式 `57 = 5 高 + 12 中 + 28 低 + 12 通过`（SKIP 0）；两次运行报告（忽略 generatedAt）逐字节一致；FULL 扫描 + 连库 6.4s（NFR ≤30s）
 - [x] **T12.2**（2026-10-15）文档回写：README（CLI 参数、yaml datasource 示例、示例文件删除）、CLAUDE.md（模块约束/元数据来源）、JOURNAL、详设偏差回写（如有）
 - [x] **T12.3**（2026-10-15）全量回归：`mvn -o clean verify` 全绿；确定性复验（两轮独立 JVM）
 - 验收（2026-10-15 实测）：**312/312 全绿**（离线 `mvn -o clean verify`）；**确定性复验**（`AnalysisEngineIT` 两轮独立 JVM 全绿）；**CLI 端到端冒烟**（shaded jar + 外部 H2 classpath 走真实命令：`[元数据] … 加载 0 张表（一次加载，连接已关闭）`（AC-12）+ DIFF 命中 H2 高危 + JSON/HTML 双报告）；文档回写完成——README（datasource 示例/CLI 表/状态）、CLAUDE.md（依赖图/SPI/技术栈）、概设 §3.3（`config → parser` 边）、详设 v1.8 实现回写（类型别名归一/环境变量重载/ParseContext 方言装配）
@@ -160,6 +165,12 @@
 - [x] 2026-10-15 空骨架归口 SKIP：解析产物为空（含 `${}` 解析失败的短路候选）且语句级短路未命中 → 从 `level=null` 结果改归 SKIP（PARSE_FAILED，"无可用 SQL 骨架"）；短路命中语义不变（AC-11）；`RuleEngine.run` 返回 `Outcome{results, skipped}`；ac12 增第三形态；302 用例全绿 → 详设 v1.6（§11.2-④）
 - [x] 2026-10-15 HTML 报告文案与统计：分区/徽标「未命中风险规则·无命中」更名为「**通过**」，头部统计新增「通过」卡片（= total − 高 − 中 − 低）与恒等式行口径同步；JSON 契约不变；302 用例全绿 → 详设 v1.7（§12.5）
 - [x] 2026-10-15 扩展实现（FR-8/FR-9）**交付完毕**：设计定稿（需求 v1.1、概要 v1.8、详设 v1.8 含实现回写）；**M10 数据库元数据 / M11 方言 SPI / M12 回归与收尾 均已确认**（真实 MySQL 验证为唯一暂缓项）；312 用例全绿
+- [x] 2026-10-14 **Sonar 规范治理（需求方驱动）**：以 SonarCloud 扫描报告（165 issue / 23 规则，IMPACT_RANK）为输入，按三批治理并全量回归：
+      - **BLOCKER 修复**：`javabugs:S2259`（NPE×11）根因根治——`RuleContext.facts()` 对语句级上下文改为 fail-fast（抛 `IllegalStateException`，引擎 `safeCheck` 兜底不变）；`S5998`（正则栈溢出）白名单模式改所有格量词（22 组用例等价性验证）；`S2447`（Boolean 返回 null）改 `Optional`。
+      - **机械类批量修复**：S1128 未用导入 ×11、S1192 重复字面量 ×11、S9391 循环→Stream ×20、S1168 空集合返回 ×3、S1172 未用参数 ×7（含 `ConfigLoader.load` 移除 `repoPath` 保留参数，**详设 §6 同步**）、S8491/S7158/S1130/S5961/S5785/S8714/S1066/S127/S1905 等；**诊断输出集中化**：新增 `util/Diagnostics`，生产代码 `System.err` 从 22 处收敛至 1 处（S106 豁免点从 22 → 3）。
+      - **认知复杂度拆分**（S3776 ×23，含 `LambdaSkeletonRenderer.applyCalls` 101 → 分组方法、`LambdaSqlExtractor.buildModels` 36 → 单一职责拆分）与 S135 循环跳转收敛 ×10。
+      - **设计性例外集中登记**：`docs/sonar-exceptions.md`（EX-1 S106 标准流 / EX-2 S1181 顶层 Throwable 兜底 / EX-3 S107 值对象构造器 ×4），含理由、替代保障与失效条件；SonarCloud 侧按 Accepted 标记。
+      - **回归**：`mvn -o clean verify` **314 用例全绿**（含 14 黄金样例，ac06 夹具按 S7158 调整后 expected 仅 head SHA 变化、语义零漂移）；详设 v1.9 回写；**复扫由需求方执行验证**（预期剩余 = 登记例外）
 
 ## 预研风险清单（M0.3 提前处理，结论回写本节）
 

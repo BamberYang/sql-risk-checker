@@ -34,9 +34,7 @@ public final class SqlRiskCheckerMain {
      * 按需修改此处即可改变默认调试目标（库名以实际为准）。
      */
     static final String[] DEBUG_DEFAULT_ARGV = {
-            "--repo", "/Users/loafer/Documents/WorkSpace/union/union-channel-app",
-            "--db-url", "jdbc:mysql://127.0.0.1:3306/union_order",
-            "--db-username", "root",
+            "--repo", "/Users/loafer/Documents/WorkSpace/union/union-order-app",
             //"--prod-commit","a32658d8aef5ca1ee7f2cbc6a0da76190844bb5b",
             //"--head-commit","",
             "--output", "/tmp/sql-risk-debug",
@@ -72,7 +70,7 @@ public final class SqlRiskCheckerMain {
             }
             verbose = args.verbose();
             AppConfig config = ConfigLoader.load(new CliOverrides(args.configPath(), args.dialect(),
-                    args.dbUrl(), args.dbUsername(), args.dbPassword()), args.repoPath());
+                    args.dbUrl(), args.dbUsername(), args.dbPassword()));
             RunContext ctx = new RunContext(args.repoPath(), args.headCommit(), args.prodCommit(), config,
                     args.outputDir(), args.verbose(), clock);
             ReportModel report = new AnalysisEngine(clock).execute(ctx);

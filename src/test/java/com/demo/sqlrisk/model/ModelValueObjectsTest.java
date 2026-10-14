@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -52,11 +53,14 @@ class ModelValueObjectsTest {
                 new Summary(1, 0, 0, 0, 0, 0), Collections.singletonList(result),
                 Collections.<IgnoredItem>emptyList(), Collections.<SkippedItem>emptyList());
 
-        assertThrows(UnsupportedOperationException.class, () -> report.results().add(result));
-        assertThrows(UnsupportedOperationException.class, () -> report.ignored().add(
-                new IgnoredItem("x", "f", 1, "whitelist")));
-        assertThrows(UnsupportedOperationException.class, () -> report.skipped().add(
-                new SkippedItem(null, "f", 1, SkippedItem.Kind.READ_ERROR, "r")));
+        List<StatementResult> results = report.results();
+        List<IgnoredItem> ignored = report.ignored();
+        List<SkippedItem> skipped = report.skipped();
+        IgnoredItem ignoredItem = new IgnoredItem("x", "f", 1, "whitelist");
+        SkippedItem skippedItem = new SkippedItem(null, "f", 1, SkippedItem.Kind.READ_ERROR, "r");
+        assertThrows(UnsupportedOperationException.class, () -> results.add(result));
+        assertThrows(UnsupportedOperationException.class, () -> ignored.add(ignoredItem));
+        assertThrows(UnsupportedOperationException.class, () -> skipped.add(skippedItem));
         assertNull(report.prodCommit());
     }
 

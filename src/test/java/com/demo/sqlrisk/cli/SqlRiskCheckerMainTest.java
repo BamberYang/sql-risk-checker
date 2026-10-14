@@ -192,7 +192,7 @@ class SqlRiskCheckerMainTest {
     }
 
     @Test
-    void verbose_prints_extracted_statement_list() throws Exception {
+    void verbose_prints_extracted_statement_list() {
         // 主入口端到端：diff 模式扫描出变动 SQL（mapper/A.xml 的 SELECT v1 → v2）
         PrintStream originalErr = System.err;
         System.setErr(err); // 引擎提取日志走 System.err（进度日志，stderr 契约）

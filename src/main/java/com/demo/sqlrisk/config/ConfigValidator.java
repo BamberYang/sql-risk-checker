@@ -18,7 +18,7 @@ public final class ConfigValidator {
      * {@code *} 仅可出现在末尾段。
      */
     private static final Pattern WHITELIST_PATTERN =
-            Pattern.compile("^[A-Za-z_$][\\w$]*(\\.[A-Za-z_$][\\w$]*)*(\\.\\*)?$");
+            Pattern.compile("^[A-Za-z_$][\\w$]*+(?:\\.[A-Za-z_$][\\w$]*+)*+(?:\\.\\*)?$"); // 所有格量词防灾难回溯（S5998）
 
     private ConfigValidator() {
     }

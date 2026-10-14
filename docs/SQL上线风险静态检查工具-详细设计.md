@@ -7,8 +7,8 @@
 | 项    | 内容                                             |
 | ---- | ---------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具详细设计                            |
-| 版本   | v1.8                                           |
-| 日期   | 2026-10-15                                     |
+| 版本   | v1.9                                           |
+| 日期   | 2026-10-14                                     |
 | 关联文档 | 需求文档 v1.1（FR-8/FR-9 扩展）；概要设计 v1.8（决策 D1~D27）     |
 | 本文定位 | 编码直接依据：类结构、方法签名、算法伪码、常量阈值、测试类清单；不包含最终源码本身      |
 | 阅读顺序 | §2 设计约定 → §3 类总览 → §4~§14 分包详设 → §15 异常 → §18 测试 → §19 决策 → §20 追溯 |
@@ -179,7 +179,7 @@ public final class DataSourceSetting {
 }
 ```
 
-`ConfigLoader.load(CliOverrides overrides, String repoPath)` 流程（v1.8 起以不可变 `CliOverrides{configPath, dialect, dbUrl, dbUsername, dbPassword}` 携带 CLI 值，避免 config 包反向依赖 cli，§3.3；另有 `load(overrides, repoPath, Map<String,String> env)` 重载供测试注入环境变量——M10 实现回写）：
+`ConfigLoader.load(CliOverrides overrides)` 流程（v1.8 起以不可变 `CliOverrides{configPath, dialect, dbUrl, dbUsername, dbPassword}` 携带 CLI 值，避免 config 包反向依赖 cli，§3.3；另有 `load(overrides, Map<String,String> env)` 重载供测试注入环境变量——M10 实现回写；v1.9 移除未使用的 `repoPath` 保留参数）：
 
 1. 读内置 `resources/default-config.yaml` → 用户 `--config` 文件覆盖 → CLI 覆盖（dialect / db-url / db-username / db-password）。
 2. yaml 解析（SnakeYAML `safeLoad`，禁用任意对象构造）；未知顶层键 → stderr 警告忽略；已移除键 `bulk_operation_threshold`、`conservative_if_always_false`、**`metadata_file`（v1.8/D24）** → 告警并忽略。
@@ -695,6 +695,7 @@ public interface Rule {
 public final class RuleContext {
     ParsedSql parsedSql; StatementMeta meta; MetadataProvider metadata; AppConfig config;
     String rawText;                 // 语句原文（含被丢弃分支）—— M8/L1 用
+    QueryFacts facts();             // 骨架事实；语句级上下文（parsedSql=null）调用即抛 IllegalStateException
 }
 public interface RuleProvider { List<Rule> rules(); }
 ```
@@ -972,6 +973,7 @@ ignored = ignored.size()
 | `TextUtils`    | 空白归一化、大小写折叠、截断（120/200 字符）、驼峰→下划线转换                        |
 | `IoUtils`      | 目录创建、UTF-8 覆盖写、文件编码探测（XML 声明）                               |
 | `JavaSourceIndex` | 全仓 `CompilationUnit` 缓存与 `(package, 简名)` 索引（供常量/Provider/实体解析） |
+| `Diagnostics`  | 诊断/警告/进度输出统一出口（**唯一**调用 `System.err` 的生产类，Sonar S106 集中豁免点；CLI 契约与 slf4j-nop 决策见 `docs/sonar-exceptions.md`） |
 
 ***
 
@@ -1233,3 +1235,5 @@ SQL 上线风险静态检查工具 v0.1
 *v1.8（2026-10-15，需求方扩展驱动，FR-8/FR-9）：① §7 重写——元数据改为 `JdbcMetadataProvider` **JDBC 一次加载**（连接即关、失败 exit 2），文件通道（`JsonMetadataProvider`/`--metadata`/`metadata_file`）移除（D24/DD-13）；② §10.4/§10.5/新增 §10.7——`SqlDialect` 方言 SPI（MySQL 实现 + Oracle/PG 预留要点 + 未支持值报错，D25/DD-14）；③ §6 增 `DataSourceSetting` 与连接三通道/密码优先级（D26）；④ §7/§18.2 JDBC 驱动**pom 内嵌**（MySQL Connector/J）与 H2 测试载体（D27/DD-15，2026-10-15 确认）；⑤ §5/§13/§15/§17/§18/附录 B 同步。*
 
 *v1.8 实现回写（2026-10-15，M10/M11 落地）：① §7 类型跨库别名归一（CHARACTER VARYING/CHAR VARYING→VARCHAR、CHARACTER→CHAR、INTEGER→INT，H2 实测）；② §6 ConfigLoader 增环境变量注入重载（测试用，密码优先级语义不变）；③ §10.7 方言经 `ParseContext` 装配（3 参构造缺省 MySQL，引擎注入配置值）；④ 概要设计 §3.3 依赖图新增 `config → parser` 边（方言取值校验经 `SqlDialects.supportedNames()`，无环）。*
+
+*v1.9（2026-10-14，Sonar 规范治理，需求方驱动）：① §14 新增 `Diagnostics`——诊断输出统一出口，生产代码 `System.err` 用法集中至此一处（S106 设计性豁免登记化）；② §11.1 `RuleContext.facts()` 契约收紧——语句级上下文（parsedSql=null）调用即抛 `IllegalStateException`（fail fast，原返回 null 的误用隐患消除；引擎 `safeCheck` 兜底不变，S2259 类问题根治）；③ §6 `ConfigLoader` 移除未使用的 `repoPath` 保留参数（S1172）；④ 全量代码按 Sonar 规范重构（复杂度拆分、重复字面量常量化、循环→Stream、断言规范等），设计性例外集中登记于 `docs/sonar-exceptions.md`（S106/S107/S1181）；⑤ §18.3 `ac06` 夹具按 S7158 调整（`String.isEmpty()`）并更新 expected 的 head SHA（语义字段零漂移）。*

@@ -98,8 +98,7 @@ class AnalysisEngineIT {
             configPath = configFile.toString();
         }
 
-        AppConfig config = ConfigLoader.load(new CliOverrides(configPath, null, dbUrl, "sa", ""),
-                repoPath.toString());
+        AppConfig config = ConfigLoader.load(new CliOverrides(configPath, null, dbUrl, "sa", ""));
         RunContext ctx = new RunContext(repoPath.toString(), null, prodCommitArg(goldenCase, input), config,
                 repoPath.toString(), false, TestClocks.fixed());
         ReportModel report = new AnalysisEngine(TestClocks.fixed()).execute(ctx);
@@ -164,22 +163,23 @@ class AnalysisEngineIT {
         Path plain = Files.createTempDirectory("ac09-plain-");
         try {
             // 非 git 仓库
+            String plainPath = plain.toString();
             assertExit2(assertThrows(SqlRiskException.class,
-                    () -> GitRepo.open(plain.toString())), "非 git 仓库");
+                    () -> GitRepo.open(plainPath)), "非 git 仓库");
             // 数据库元数据加载失败（v1.8/FR-8：驱动/连接不可用 → exit 2）
+            com.demo.sqlrisk.config.DataSourceSetting badDs = new com.demo.sqlrisk.config.DataSourceSetting(
+                    "jdbc:unknown-subprotocol://127.0.0.1/none", "u", "p", 2);
             assertExit2(assertThrows(SqlRiskException.class,
-                    () -> com.demo.sqlrisk.metadata.JdbcMetadataProvider.load(
-                            new com.demo.sqlrisk.config.DataSourceSetting(
-                                    "jdbc:unknown-subprotocol://127.0.0.1/none", "u", "p", 2))),
+                    () -> com.demo.sqlrisk.metadata.JdbcMetadataProvider.load(badDs)),
                     "元数据加载失败（未知驱动/连接不可用）");
             // datasource.url 未配置（默认配置为空 → 校验失败）
+            CliOverrides noDbUrl = new CliOverrides(null, null, null, null, null);
             assertExit2(assertThrows(SqlRiskException.class,
-                    () -> ConfigLoader.load(new CliOverrides(null, null, null, null, null),
-                            plain.toString())), "datasource.url 未配置");
+                    () -> ConfigLoader.load(noDbUrl)), "datasource.url 未配置");
             // 方言未支持（预留值 → 明确报错不降级）
+            CliOverrides oracleDialect = new CliOverrides(null, "oracle", "jdbc:h2:mem:x", "sa", "");
             assertExit2(assertThrows(SqlRiskException.class,
-                    () -> ConfigLoader.load(new CliOverrides(null, "oracle", "jdbc:h2:mem:x", "sa", ""),
-                            plain.toString())), "方言未支持");
+                    () -> ConfigLoader.load(oracleDialect)), "方言未支持");
         } finally {
             GoldenCaseRunner.deleteRecursively(plain);
         }
@@ -195,9 +195,10 @@ class AnalysisEngineIT {
             Path badConfig = repoDir.resolve("bad-config.yaml");
             Files.write(badConfig, "whitelist:\n  statements:\n    - \"com.*.mapper\"\n"
                     .getBytes(StandardCharsets.UTF_8));
+            CliOverrides badOverrides = new CliOverrides(badConfig.toString(), null,
+                    "jdbc:h2:mem:ac09;DB_CLOSE_DELAY=-1", "sa", "");
             assertExit2(assertThrows(SqlRiskException.class,
-                    () -> ConfigLoader.load(new CliOverrides(badConfig.toString(), null,
-                            "jdbc:h2:mem:ac09;DB_CLOSE_DELAY=-1", "sa", ""), repo.path().toString())),
+                    () -> ConfigLoader.load(badOverrides)),
                     "坏配置：非法白名单模式");
             try (GitRepo gitRepo = GitRepo.open(repo.path().toString())) {
                 assertExit2(assertThrows(SqlRiskException.class,

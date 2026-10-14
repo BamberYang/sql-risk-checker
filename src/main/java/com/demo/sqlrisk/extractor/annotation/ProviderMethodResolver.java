@@ -6,8 +6,8 @@ import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.VariableDeclarationExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
-import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.stmt.Statement;
@@ -77,56 +77,66 @@ public final class ProviderMethodResolver {
     private Optional<String> resolveBody(MethodDeclaration method, CompilationUnit cu) {
         Map<String, StringBuilder> builders = new LinkedHashMap<String, StringBuilder>();
         for (Statement statement : method.getBody().get().getStatements()) {
-            if (statement.isExpressionStmt()) {
-                Expression expression = statement.asExpressionStmt().getExpression();
-                if (expression.isVariableDeclarationExpr()) {
-                    for (VariableDeclarator variable
-                            : expression.asVariableDeclarationExpr().getVariables()) {
-                        if (variable.getInitializer().isPresent()
-                                && isBuilderCreation(variable.getInitializer().get())) {
-                            builders.put(variable.getNameAsString(), new StringBuilder());
-                        }
-                    }
-                } else if (expression.isMethodCallExpr()) {
-                    MethodCallExpr call = expression.asMethodCallExpr();
-                    if ("append".equals(call.getNameAsString()) && call.getScope().isPresent()
-                            && call.getScope().get().isNameExpr() && call.getArguments().size() == 1) {
-                        StringBuilder builder = builders.get(call.getScope().get().asNameExpr().getNameAsString());
-                        if (builder != null) {
-                            Optional<String> piece = resolveValue(call.getArgument(0), cu, builders);
-                            if (!piece.isPresent()) {
-                                return Optional.empty();
-                            }
-                            builder.append(piece.get());
-                        }
-                    }
-                }
-            } else if (statement.isReturnStmt()) {
-                ReturnStmt returnStmt = statement.asReturnStmt();
-                if (!returnStmt.getExpression().isPresent()) {
-                    return Optional.empty();
-                }
-                return resolveValue(returnStmt.getExpression().get(), cu, builders);
+            if (statement.isExpressionStmt()
+                    && !applyExpression(statement.asExpressionStmt().getExpression(), cu, builders)) {
+                return Optional.empty(); // append 参数无法静态解析 → 整体放弃（不猜测）
+            }
+            if (statement.isReturnStmt()) {
+                return resolveReturn(statement.asReturnStmt(), cu, builders);
             }
         }
         return Optional.empty();
     }
 
+    /** 表达式语句：builder 变量声明入表 / 已知 builder 的字面量 append 累加；false = 参数不可解析。 */
+    private boolean applyExpression(Expression expression, CompilationUnit cu,
+                                    Map<String, StringBuilder> builders) {
+        if (expression.isVariableDeclarationExpr()) {
+            collectBuilders(expression.asVariableDeclarationExpr(), builders);
+            return true;
+        }
+        if (!expression.isMethodCallExpr() || !isSingleArgAppend(expression.asMethodCallExpr())) {
+            return true;
+        }
+        MethodCallExpr call = expression.asMethodCallExpr();
+        StringBuilder builder = builders.get(call.getScope().get().asNameExpr().getNameAsString());
+        if (builder == null) {
+            return true;
+        }
+        Optional<String> piece = resolveValue(call.getArgument(0), cu, builders);
+        if (!piece.isPresent()) {
+            return false;
+        }
+        builder.append(piece.get());
+        return true;
+    }
+
+    private static boolean isSingleArgAppend(MethodCallExpr call) {
+        return "append".equals(call.getNameAsString()) && call.getScope().isPresent()
+                && call.getScope().get().isNameExpr() && call.getArguments().size() == 1;
+    }
+
+    private static void collectBuilders(VariableDeclarationExpr declaration,
+                                        Map<String, StringBuilder> builders) {
+        for (VariableDeclarator variable : declaration.getVariables()) {
+            if (variable.getInitializer().isPresent() && isBuilderCreation(variable.getInitializer().get())) {
+                builders.put(variable.getNameAsString(), new StringBuilder());
+            }
+        }
+    }
+
+    private Optional<String> resolveReturn(ReturnStmt returnStmt, CompilationUnit cu,
+                                           Map<String, StringBuilder> builders) {
+        if (!returnStmt.getExpression().isPresent()) {
+            return Optional.empty();
+        }
+        return resolveValue(returnStmt.getExpression().get(), cu, builders);
+    }
+
     private Optional<String> resolveValue(Expression expr, CompilationUnit cu,
                                           Map<String, StringBuilder> builders) {
         if (expr.isMethodCallExpr()) {
-            MethodCallExpr call = expr.asMethodCallExpr();
-            String name = call.getNameAsString();
-            if ("toString".equals(name) && call.getScope().isPresent()) {
-                return resolveValue(call.getScope().get(), cu, builders);
-            }
-            if ("append".equals(name) && call.getScope().isPresent() && call.getArguments().size() == 1) {
-                Optional<String> base = resolveValue(call.getScope().get(), cu, builders);
-                Optional<String> piece = resolveValue(call.getArgument(0), cu, builders);
-                return base.isPresent() && piece.isPresent()
-                        ? Optional.of(base.get() + piece.get())
-                        : Optional.<String>empty();
-            }
+            return resolveCallValue(expr.asMethodCallExpr(), cu, builders);
         }
         if (expr.isObjectCreationExpr() && isBuilderCreation(expr)) {
             return Optional.of("");
@@ -138,6 +148,23 @@ public final class ProviderMethodResolver {
             }
         }
         return new JavaConstantResolver(sourceIndex).resolve(expr, cu);
+    }
+
+    /** 方法调用：{@code toString()} 取 scope 值；{@code append(...)} 拼接 scope 与参数；其余 → 常量解析兜底。 */
+    private Optional<String> resolveCallValue(MethodCallExpr call, CompilationUnit cu,
+                                              Map<String, StringBuilder> builders) {
+        String name = call.getNameAsString();
+        if ("toString".equals(name) && call.getScope().isPresent()) {
+            return resolveValue(call.getScope().get(), cu, builders);
+        }
+        if ("append".equals(name) && call.getScope().isPresent() && call.getArguments().size() == 1) {
+            Optional<String> base = resolveValue(call.getScope().get(), cu, builders);
+            Optional<String> piece = resolveValue(call.getArgument(0), cu, builders);
+            return base.isPresent() && piece.isPresent()
+                    ? Optional.of(base.get() + piece.get())
+                    : Optional.<String>empty();
+        }
+        return new JavaConstantResolver(sourceIndex).resolve(call, cu);
     }
 
     private static boolean isBuilderCreation(Expression expr) {

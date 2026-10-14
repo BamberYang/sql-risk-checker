@@ -1,6 +1,7 @@
 package com.demo.sqlrisk.metadata;
 
 import com.demo.sqlrisk.config.DataSourceSetting;
+import com.demo.sqlrisk.util.Diagnostics;
 
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -16,6 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 /**
  * 数据库元数据加载（详细设计 §7，v1.8/FR-8/D24）：JDBC 连接数据库一次性加载
@@ -66,7 +68,7 @@ public final class JdbcMetadataProvider implements MetadataProvider {
             DatabaseMetaData meta = connection.getMetaData();
             String catalog = safeCatalog(connection);
             String schema = safeSchema(connection);
-            return new JdbcMetadataProvider(readSnapshot(meta, catalog, schema, cfg.url()));
+            return new JdbcMetadataProvider(readSnapshot(meta, catalog, schema));
         } catch (SQLException e) {
             throw new MetadataException("数据库元数据加载失败（" + cfg.url() + "）：" + e.getMessage());
         } catch (RuntimeException e) {
@@ -77,8 +79,22 @@ public final class JdbcMetadataProvider implements MetadataProvider {
     // ---------- 读取 ----------
 
     private static Map<String, TableMetadata> readSnapshot(DatabaseMetaData meta, String catalog,
-                                                           String schema, String url) throws SQLException {
+                                                           String schema) throws SQLException {
         Map<String, TableMetadata> byLower = new TreeMap<String, TableMetadata>(); // 排序保证确定性
+        for (String table : readTableNames(meta, catalog, schema)) {
+            String key = table.toLowerCase(Locale.ROOT);
+            if (byLower.containsKey(key)) {
+                Diagnostics.warn("[警告] 数据库元数据中重复表名，取首条: " + table);
+                continue;
+            }
+            byLower.put(key, new TableMetadata(table,
+                    readFields(meta, catalog, schema, table), readIndexes(meta, catalog, schema, table)));
+        }
+        return byLower;
+    }
+
+    private static List<String> readTableNames(DatabaseMetaData meta, String catalog,
+                                               String schema) throws SQLException {
         List<String> tables = new ArrayList<String>();
         try (ResultSet rs = meta.getTables(catalog, schema, "%", new String[]{"TABLE"})) {
             while (rs.next()) {
@@ -88,16 +104,7 @@ public final class JdbcMetadataProvider implements MetadataProvider {
                 }
             }
         }
-        for (String table : tables) {
-            String key = table.toLowerCase(Locale.ROOT);
-            if (byLower.containsKey(key)) {
-                System.err.println("[警告] 数据库元数据中重复表名，取首条: " + table);
-                continue;
-            }
-            byLower.put(key, new TableMetadata(table,
-                    readFields(meta, catalog, schema, table), readIndexes(meta, catalog, schema, table)));
-        }
-        return byLower;
+        return tables;
     }
 
     private static Map<String, FieldMeta> readFields(DatabaseMetaData meta, String catalog,
@@ -119,8 +126,7 @@ public final class JdbcMetadataProvider implements MetadataProvider {
 
     private static List<IndexMeta> readIndexes(DatabaseMetaData meta, String catalog,
                                                String schema, String table) throws SQLException {
-        Map<String, java.util.TreeMap<Integer, String>> byIndex =
-                new TreeMap<String, java.util.TreeMap<Integer, String>>();
+        Map<String, TreeMap<Integer, String>> byIndex = new TreeMap<String, TreeMap<Integer, String>>();
         try (ResultSet rs = meta.getIndexInfo(catalog, schema, table, false, false)) {
             while (rs.next()) {
                 String indexName = rs.getString("INDEX_NAME");
@@ -129,19 +135,18 @@ public final class JdbcMetadataProvider implements MetadataProvider {
                     continue; // tableIndexStatistic 等统计行
                 }
                 int position = rs.getInt("ORDINAL_POSITION");
-                java.util.TreeMap<Integer, String> columns = byIndex.get(indexName);
+                TreeMap<Integer, String> columns = byIndex.get(indexName);
                 if (columns == null) {
-                    columns = new java.util.TreeMap<Integer, String>();
+                    columns = new TreeMap<Integer, String>();
                     byIndex.put(indexName, columns);
                 }
                 columns.put(position, column.trim());
             }
         }
-        List<IndexMeta> indexes = new ArrayList<IndexMeta>();
-        for (Map.Entry<String, java.util.TreeMap<Integer, String>> entry : byIndex.entrySet()) {
-            indexes.add(new IndexMeta(entry.getKey(), new ArrayList<String>(entry.getValue().values())));
-        }
-        return indexes;
+        return byIndex.entrySet().stream()
+                .map(entry -> new IndexMeta(entry.getKey(),
+                        new ArrayList<String>(entry.getValue().values())))
+                .collect(Collectors.toList());
     }
 
     /** 类型归一化：基名 + 长度/精度（如 varchar(64)、numeric(19,2)、timestamp(6)）；跨库别名归一。 */

@@ -1,6 +1,7 @@
 package com.demo.sqlrisk.config;
 
 import com.demo.sqlrisk.model.RiskLevel;
+import com.demo.sqlrisk.util.Diagnostics;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.SafeConstructor;
@@ -17,6 +18,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 配置加载（详细设计 §6，v1.8）：三层合并——内置默认（resources/default-config.yaml）
@@ -37,25 +39,25 @@ public final class ConfigLoader {
 
     private static final String DEFAULT_RESOURCE = "/default-config.yaml";
     private static final String PASSWORD_ENV = "SQL_RISK_DB_PASSWORD";
+    private static final String KEY_DIALECT = "dialect";
     private static final int DEFAULT_CONNECTION_TIMEOUT_SECONDS = 10; // §17
     private static final List<String> REMOVED_KEYS =
             Arrays.asList("bulk_operation_threshold", "conservative_if_always_false", "metadata_file");
     private static final List<String> KNOWN_KEYS =
-            Arrays.asList("rules", "datasource", "dialect", "low_risk_keywords", "whitelist");
+            Arrays.asList("rules", "datasource", KEY_DIALECT, "low_risk_keywords", "whitelist");
 
     private ConfigLoader() {
     }
 
-    public static AppConfig load(CliOverrides overrides, String repoPath) {
-        return load(overrides, repoPath, System.getenv());
+    public static AppConfig load(CliOverrides overrides) {
+        return load(overrides, System.getenv());
     }
 
     /**
-     * @param overrides  CLI 覆盖值（可空字段 = 未提供）
-     * @param repoPath   目标仓库路径（保留参数：供未来的仓库相对路径解析场景）
-     * @param env        环境变量视图（测试可注入；密码读取 {@code SQL_RISK_DB_PASSWORD}）
+     * @param overrides CLI 覆盖值（可空字段 = 未提供）
+     * @param env       环境变量视图（测试可注入；密码读取 {@code SQL_RISK_DB_PASSWORD}）
      */
-    public static AppConfig load(CliOverrides overrides, String repoPath, Map<String, String> env) {
+    public static AppConfig load(CliOverrides overrides, Map<String, String> env) {
         RawConfig merged = parseResourceDefaults();
         applyRuleOverridesFromDefaults(merged);
 
@@ -148,11 +150,13 @@ public final class ConfigLoader {
         }
         cfg.ruleOverrides = parseRules(root.get("rules"), source);
         parseDatasource(root.get("datasource"), cfg, source);
-        if (root.get("dialect") != null) {
-            cfg.dialect = root.get("dialect").toString().trim();
+        if (root.get(KEY_DIALECT) != null) {
+            cfg.dialect = root.get(KEY_DIALECT).toString().trim();
         }
-        cfg.lowRiskKeywords = parseKeywords(root.get("low_risk_keywords"), source);
-        cfg.whitelistStatements = parseWhitelist(root.get("whitelist"), source);
+        parseKeywords(root.get("low_risk_keywords"), source)
+                .ifPresent(keywords -> cfg.lowRiskKeywords = keywords);
+        parseWhitelist(root.get("whitelist"), source)
+                .ifPresent(statements -> cfg.whitelistStatements = statements);
         return cfg;
     }
 
@@ -234,9 +238,9 @@ public final class ConfigLoader {
     }
 
     @SuppressWarnings("unchecked")
-    private static List<String> parseKeywords(Object value, String source) {
+    private static Optional<List<String>> parseKeywords(Object value, String source) {
         if (value == null) {
-            return null; // 未提供 = 不覆盖
+            return Optional.empty(); // 未提供 = 不覆盖
         }
         if (!(value instanceof List)) {
             throw new ConfigException(source + "：low_risk_keywords 必须是列表");
@@ -248,20 +252,20 @@ public final class ConfigLoader {
             }
             out.add(item.toString());
         }
-        return out;
+        return Optional.of(out);
     }
 
     @SuppressWarnings("unchecked")
-    private static List<String> parseWhitelist(Object value, String source) {
+    private static Optional<List<String>> parseWhitelist(Object value, String source) {
         if (value == null) {
-            return null; // 未提供 = 不覆盖
+            return Optional.empty(); // 未提供 = 不覆盖
         }
         if (!(value instanceof Map)) {
             throw new ConfigException(source + "：whitelist 必须是映射");
         }
         Object statements = ((Map<String, Object>) value).get("statements");
         if (statements == null) {
-            return null;
+            return Optional.empty();
         }
         if (!(statements instanceof List)) {
             throw new ConfigException(source + "：whitelist.statements 必须是列表");
@@ -273,7 +277,7 @@ public final class ConfigLoader {
             }
             out.add(item.toString().trim());
         }
-        return out;
+        return Optional.of(out);
     }
 
     // ---------- 合并 ----------
@@ -323,7 +327,7 @@ public final class ConfigLoader {
     }
 
     private static void warn(String message) {
-        System.err.println("[警告] " + message);
+        Diagnostics.warn("[警告] " + message);
     }
 
     /** 解析中间态：默认配置与用户配置共用（用户侧字段为 null 表示"未提供"）。 */

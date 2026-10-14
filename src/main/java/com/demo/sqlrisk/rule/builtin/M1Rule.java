@@ -1,6 +1,5 @@
 package com.demo.sqlrisk.rule.builtin;
 
-import com.demo.sqlrisk.metadata.MetadataProvider;
 import com.demo.sqlrisk.metadata.TableMetadata;
 import com.demo.sqlrisk.model.Finding;
 import com.demo.sqlrisk.model.RiskLevel;
@@ -48,26 +47,9 @@ public final class M1Rule implements Rule {
         }
         List<String> unindexed = new ArrayList<String>();
         for (String table : facts.tables()) {
-            Set<String> columns = facts.candidateColumnsOf(table);
-            if (columns.isEmpty()) {
-                continue;
-            }
-            String columnList = "(" + String.join(", ", columns) + ")";
-            Optional<TableMetadata> metadata = ctx.metadata() == null
-                    ? Optional.<TableMetadata>empty() : ctx.metadata().find(table);
-            if (!metadata.isPresent()) {
-                unindexed.add(table + columnList + "（表不在元数据中，默认无索引）");
-                continue;
-            }
-            boolean hit = false;
-            for (String column : columns) {
-                if (metadata.get().hasIndexStartingWith(column)) {
-                    hit = true;
-                    break;
-                }
-            }
-            if (!hit) {
-                unindexed.add(table + columnList);
+            String note = unindexedNote(ctx, facts, table);
+            if (note != null) {
+                unindexed.add(note);
             }
         }
         if (unindexed.isEmpty()) {
@@ -75,5 +57,25 @@ public final class M1Rule implements Rule {
         }
         return RuleSupport.single(RuleSupport.finding(id(), defaultLevel(),
                 "条件列未命中索引：" + String.join("；", unindexed), ctx));
+    }
+
+    /** 表未命中索引的描述；（null = 该表无归属过滤列，或已命中索引）。 */
+    private static String unindexedNote(RuleContext ctx, QueryFacts facts, String table) {
+        Set<String> columns = facts.candidateColumnsOf(table);
+        if (columns.isEmpty()) {
+            return null;
+        }
+        String columnList = "(" + String.join(", ", columns) + ")";
+        Optional<TableMetadata> metadata = ctx.metadata() == null
+                ? Optional.<TableMetadata>empty() : ctx.metadata().find(table);
+        if (!metadata.isPresent()) {
+            return table + columnList + "（表不在元数据中，默认无索引）";
+        }
+        for (String column : columns) {
+            if (metadata.get().hasIndexStartingWith(column)) {
+                return null;
+            }
+        }
+        return table + columnList;
     }
 }

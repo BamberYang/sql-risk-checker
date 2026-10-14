@@ -12,20 +12,18 @@ import com.demo.sqlrisk.model.StatementResult;
 import com.demo.sqlrisk.model.StatementSource;
 import com.demo.sqlrisk.model.Summary;
 import com.demo.sqlrisk.testutil.ReportFixtures;
-import com.demo.sqlrisk.testutil.TestClocks;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.OffsetDateTime;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 /** 交付后增补（详设 §12.5）：HTML 阅读层——单文件离线自包含、结构/转义/确定性/写出语义。 */
 class HtmlReporterTest {
@@ -56,8 +54,14 @@ class HtmlReporterTest {
         assertTrue(html.contains("<option value=\"H1\">H1</option>"), "规则下拉含命中规则");
         assertTrue(html.contains("<option value=\"src/main/resources/mapper/OrderMapper.xml\">"),
                 "文件下拉含来源文件");
-        assertTrue(html.contains("com.demo.mapper.OrderMapper.updateStatus"), "卡片展示 statementId");
+    }
+
+    @Test
+    void renders_cards_skips_ignored_and_inline_script() {
+        String html = HtmlReporter.toHtml(ReportFixtures.sampleReport());
+
         // 分区与卡片
+        assertTrue(html.contains("com.demo.mapper.OrderMapper.updateStatus"), "卡片展示 statementId");
         assertTrue(html.contains("高危明细（1）") && html.contains("中危明细（1）")
                 && html.contains("低危明细（1）") && html.contains("通过（1）"), html);
         assertTrue(html.contains("data-level=\"HIGH\""), "卡片级别属性（筛选联动）");
@@ -116,13 +120,11 @@ class HtmlReporterTest {
 
         Path blocker = tempDir.resolve("blocker");
         Files.write(blocker, "not a dir".getBytes(StandardCharsets.UTF_8));
-        try {
-            HtmlReporter.write(ReportFixtures.sampleReport(), blocker.toString());
-            fail("应抛出 ReportException");
-        } catch (ReportException e) {
-            assertEquals(2, e.exitCode());
-            assertTrue(e.getMessage().contains("HTML 报告写出失败"), e.getMessage());
-        }
+        ReportModel report = ReportFixtures.sampleReport();
+        String blockerPath = blocker.toString();
+        ReportException e = assertThrows(ReportException.class, () -> HtmlReporter.write(report, blockerPath));
+        assertEquals(2, e.exitCode());
+        assertTrue(e.getMessage().contains("HTML 报告写出失败"), e.getMessage());
     }
 
     @Test

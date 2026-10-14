@@ -40,9 +40,9 @@ class M6RuleTest {
 
     @Test
     void literal_only_branch_counts_as_not_satisfied() {
-        assertTrue(rule.check(RuleTestSupport.ctx(
+        assertEquals(1, rule.check(RuleTestSupport.ctx(
                 "SELECT id FROM t_order WHERE 1 = 1 OR user_id = 1",
-                RuleTestSupport.orderMetadata(), null)).size() == 1, "无列分支（1=1）→ 命中");
+                RuleTestSupport.orderMetadata(), null)).size(), "无列分支（1=1）→ 命中");
     }
 
     @Test

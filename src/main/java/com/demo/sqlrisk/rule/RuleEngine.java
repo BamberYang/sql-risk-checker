@@ -9,11 +9,13 @@ import com.demo.sqlrisk.model.StatementMeta;
 import com.demo.sqlrisk.model.StatementResult;
 import com.demo.sqlrisk.parser.ParsedSql;
 import com.demo.sqlrisk.parser.ParsedStatement;
+import com.demo.sqlrisk.util.Diagnostics;
 import com.demo.sqlrisk.util.TextUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 规则引擎（详细设计 §11.2、FR-4、AC-4）：
@@ -125,34 +127,26 @@ public final class RuleEngine {
                 return Collections.emptyList();
             }
             RiskLevel effectiveLevel = registry.effectiveLevel(rule);
-            List<Finding> adjusted = new ArrayList<Finding>(findings.size());
-            for (Finding finding : findings) {
-                adjusted.add(finding.level() == effectiveLevel ? finding
-                        : new Finding(finding.ruleId(), effectiveLevel, finding.message(),
-                        finding.snippet(), finding.skeletonIndex()));
-            }
-            return adjusted;
+            return findings.stream()
+                    .map(finding -> finding.level() == effectiveLevel ? finding
+                            : new Finding(finding.ruleId(), effectiveLevel, finding.message(),
+                            finding.snippet(), finding.skeletonIndex()))
+                    .collect(Collectors.toList());
         } catch (RuntimeException e) {
-            System.err.println("[警告] 规则执行异常，跳过: " + rule.id()
+            Diagnostics.warn("[警告] 规则执行异常，跳过: " + rule.id()
                     + "（" + ctx.meta().statementId() + "）：" + e);
             return Collections.emptyList();
         }
     }
 
     private static List<Finding> withSkeletonIndex(List<Finding> findings, int index) {
-        List<Finding> out = new ArrayList<Finding>(findings.size());
-        for (Finding finding : findings) {
-            out.add(new Finding(finding.ruleId(), finding.level(), finding.message(),
-                    finding.snippet(), index));
-        }
-        return out;
+        return findings.stream()
+                .map(finding -> new Finding(finding.ruleId(), finding.level(), finding.message(),
+                        finding.snippet(), index))
+                .collect(Collectors.toList());
     }
 
     private static List<RiskLevel> levelsOf(List<Finding> findings) {
-        List<RiskLevel> levels = new ArrayList<RiskLevel>(findings.size());
-        for (Finding finding : findings) {
-            levels.add(finding.level());
-        }
-        return levels;
+        return findings.stream().map(Finding::level).collect(Collectors.toList());
     }
 }

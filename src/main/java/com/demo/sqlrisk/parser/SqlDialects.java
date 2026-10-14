@@ -1,5 +1,7 @@
 package com.demo.sqlrisk.parser;
 
+import com.demo.sqlrisk.util.Diagnostics;
+
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
@@ -24,17 +26,22 @@ public final class SqlDialects {
         Map<String, SqlDialect> map = new TreeMap<String, SqlDialect>();
         register(map, new MysqlDialect());
         for (SqlDialect dialect : ServiceLoader.load(SqlDialect.class)) {
-            if (dialect == null || dialect.name() == null) {
-                continue;
-            }
-            String key = dialect.name().toLowerCase(Locale.ROOT);
-            if (map.containsKey(key)) {
-                System.err.println("[警告] 外部方言与已注册方言同名，忽略: " + dialect.name());
-                continue;
-            }
-            map.put(key, dialect);
+            registerExternal(map, dialect);
         }
         REGISTRY = Collections.unmodifiableMap(map);
+    }
+
+    /** 外部方言注册：无名忽略；同名以内置优先并告警。 */
+    private static void registerExternal(Map<String, SqlDialect> map, SqlDialect dialect) {
+        if (dialect == null || dialect.name() == null) {
+            return;
+        }
+        String key = dialect.name().toLowerCase(Locale.ROOT);
+        if (map.containsKey(key)) {
+            Diagnostics.warn("[警告] 外部方言与已注册方言同名，忽略: " + dialect.name());
+            return;
+        }
+        map.put(key, dialect);
     }
 
     private SqlDialects() {

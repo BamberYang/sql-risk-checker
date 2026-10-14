@@ -51,6 +51,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Lambda 类 SQL 提取（详细设计 §9.7，FR-2/D23）：
@@ -61,11 +62,17 @@ import java.util.Set;
  */
 public final class LambdaSqlExtractor implements SqlSourceExtractor {
 
+    private static final String TYPE_QUERY_WRAPPER = "LambdaQueryWrapper";
+    private static final String TYPE_UPDATE_WRAPPER = "LambdaUpdateWrapper";
+    private static final String METHOD_LAMBDA_QUERY = "lambdaQuery";
+    private static final String METHOD_LAMBDA_UPDATE = "lambdaUpdate";
+    private static final String METHOD_LAMBDA = "lambda";
+
     private static final Set<String> DIRECT_WRAPPER_TYPES = new HashSet<String>(
-            Arrays.asList("LambdaQueryWrapper", "LambdaUpdateWrapper"));
+            Arrays.asList(TYPE_QUERY_WRAPPER, TYPE_UPDATE_WRAPPER));
 
     private static final Set<String> CONVERSION_METHODS = new HashSet<String>(
-            Arrays.asList("lambdaQuery", "lambdaUpdate", "lambda"));
+            Arrays.asList(METHOD_LAMBDA_QUERY, METHOD_LAMBDA_UPDATE, METHOD_LAMBDA));
 
     /** Consumer 组方法：实参为子链 λ（嵌套条件组）。 */
     private static final Set<String> CONSUMER_METHODS = new HashSet<String>(
@@ -108,9 +115,9 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
     @Override
     public ExtractResult extract(CandidateFile file, ExtractContext ctx) {
         String content = file.content();
-        if (!content.contains("lambdaQuery") && !content.contains("lambdaUpdate")
-                && !content.contains("LambdaQueryWrapper") && !content.contains("LambdaUpdateWrapper")
-                && !content.contains(".lambda()")) {
+        if (!content.contains(METHOD_LAMBDA_QUERY) && !content.contains(METHOD_LAMBDA_UPDATE)
+                && !content.contains(TYPE_QUERY_WRAPPER) && !content.contains(TYPE_UPDATE_WRAPPER)
+                && !content.contains("." + METHOD_LAMBDA + "()")) {
             return ExtractResult.empty(); // 廉价预检：无 Lambda 承载特征
         }
         CompilationUnit cu = parse(file, ctx);
@@ -129,9 +136,9 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
             if (!processedOutermost.add(outermost)) {
                 continue;
             }
-            models.addAll(buildModels(root, outermost, cu, declaredTypes, entityIndex, file.path()));
+            models.add(buildModel(root, outermost, declaredTypes, entityIndex, file.path()));
         }
-        models.addAll(paramWrapperModels(cu, entityIndex, file.path()));
+        models.addAll(paramWrapperModels(cu, file.path()));
 
         List<ExtractedStatement> statements = new ArrayList<ExtractedStatement>();
         for (LambdaChainModel model : models) {
@@ -152,23 +159,24 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
     // ---------- 识别 ----------
 
     private static List<Expression> findRoots(CompilationUnit cu) {
-        List<Expression> roots = new ArrayList<Expression>();
-        for (ObjectCreationExpr creation : cu.findAll(ObjectCreationExpr.class)) {
-            if (DIRECT_WRAPPER_TYPES.contains(creation.getType().getNameAsString())) {
-                roots.add(creation);
-            }
-        }
-        for (MethodCallExpr call : cu.findAll(MethodCallExpr.class)) {
-            String name = call.getNameAsString();
-            if (!CONVERSION_METHODS.contains(name)) {
-                continue;
-            }
-            if ("lambda".equals(name) && !call.getScope().isPresent()) {
-                continue; // 转换调用必须有接收者
-            }
-            roots.add(call);
-        }
+        List<Expression> roots = cu.findAll(ObjectCreationExpr.class).stream()
+                .filter(creation -> DIRECT_WRAPPER_TYPES.contains(creation.getType().getNameAsString()))
+                .map(creation -> (Expression) creation)
+                .collect(Collectors.toCollection(ArrayList::new));
+        roots.addAll(cu.findAll(MethodCallExpr.class).stream()
+                .filter(LambdaSqlExtractor::isConversionRoot)
+                .map(call -> (Expression) call)
+                .collect(Collectors.toList()));
         return roots;
+    }
+
+    /** 转换调用根（lambdaQuery/lambdaUpdate/lambda）：{@code lambda} 形式必须有接收者。 */
+    private static boolean isConversionRoot(MethodCallExpr call) {
+        String name = call.getNameAsString();
+        if (!CONVERSION_METHODS.contains(name)) {
+            return false;
+        }
+        return !METHOD_LAMBDA.equals(name) || call.getScope().isPresent();
     }
 
     private static Expression outermostOf(Expression root) {
@@ -189,99 +197,136 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
         }
     }
 
-    private static List<LambdaChainModel> buildModels(Expression root, Expression outermost,
-                                                      CompilationUnit cu, Map<String, String> declaredTypes,
-                                                      EntityIndex entityIndex, String filePath) {
+    private static LambdaChainModel buildModel(Expression root, Expression outermost,
+                                               Map<String, String> declaredTypes,
+                                               EntityIndex entityIndex, String filePath) {
         int rootLine = lineOf(root);
         MethodCallExpr rootCall = root instanceof MethodCallExpr ? (MethodCallExpr) root : null;
         BranchContext branchContext = new BranchContext(); // 控制流分支识别（§9.7-补充，M15）
 
         // 链式调用（root-first；工厂/转换调用本身不计入条件调用）
-        List<LambdaCall> calls = new ArrayList<LambdaCall>();
-        for (MethodCallExpr call : chainCalls(root, outermost)) {
-            calls.add(toCall(call, branchContext.pathOf(call)));
-        }
-        int rangeEnd = endLineOf(outermost);
+        List<LambdaCall> calls = chainCalls(root, outermost).stream()
+                .map(call -> toCall(call, branchContext.pathOf(call)))
+                .collect(Collectors.toCollection(ArrayList::new));
 
         // 载体变量与后续使用（DD-7：执行调用行纳入语句范围）
-        String carrierVar = null;
-        Optional<Node> parent = outermost.getParentNode();
-        if (parent.isPresent() && parent.get() instanceof VariableDeclarator) {
-            VariableDeclarator declarator = (VariableDeclarator) parent.get();
-            if (declarator.getInitializer().isPresent() && declarator.getInitializer().get() == outermost) {
-                carrierVar = declarator.getNameAsString();
-            }
-        }
+        String carrierVar = carrierVariableOf(outermost);
+        int rangeEnd = endLineOf(outermost);
         if (carrierVar != null) {
-            Optional<MethodDeclaration> container = outermost.findAncestor(MethodDeclaration.class);
-            if (container.isPresent()) {
-                List<MethodCallExpr> usages = new ArrayList<MethodCallExpr>();
-                for (MethodCallExpr call : container.get().findAll(MethodCallExpr.class)) {
-                    if (chainReaches(call, carrierVar) && lineOf(call) > rootLine) {
-                        usages.add(call);
-                    } else {
-                        for (Expression arg : call.getArguments()) {
-                            if (arg instanceof NameExpr && ((NameExpr) arg).getNameAsString().equals(carrierVar)) {
-                                rangeEnd = Math.max(rangeEnd, endLineOf(call)); // 执行调用（mapper.selectList(w)）
-                            }
-                        }
-                    }
-                }
-                Collections.sort(usages, CALL_ORDER);
-                for (MethodCallExpr usage : usages) {
-                    calls.add(toCall(usage, branchContext.pathOf(usage)));
-                    rangeEnd = Math.max(rangeEnd, endLineOf(usage));
-                }
-            }
-        } else if (parent.isPresent() && parent.get() instanceof MethodCallExpr) {
-            rangeEnd = Math.max(rangeEnd, endLineOf((MethodCallExpr) parent.get())); // 内联链作为实参
+            rangeEnd = extendByCarrierUsages(outermost, rootLine, carrierVar, calls, branchContext, rangeEnd);
+        } else if (outermost.getParentNode().isPresent()
+                && outermost.getParentNode().get() instanceof MethodCallExpr) {
+            rangeEnd = Math.max(rangeEnd, endLineOf(outermost.getParentNode().get())); // 内联链作为实参
         }
 
         String entityTypeName = resolveEntity(root, rootCall, carrierVar, declaredTypes, entityIndex);
         boolean updateWrapper = isUpdateWrapper(root, rootCall, carrierVar, declaredTypes);
-        LambdaChainModel model = new LambdaChainModel(filePath, rootLine, rangeEnd, entityTypeName,
+        return new LambdaChainModel(filePath, rootLine, rangeEnd, entityTypeName,
                 calls, false, updateWrapper, branchContext.groups());
-        List<LambdaChainModel> out = new ArrayList<LambdaChainModel>(1);
-        out.add(model);
-        return out;
+    }
+
+    /** 载体变量：链根直接作为变量初始化式（其后续使用需纳入语句范围，DD-7）。 */
+    private static String carrierVariableOf(Expression outermost) {
+        Optional<Node> parent = outermost.getParentNode();
+        if (!parent.isPresent() || !(parent.get() instanceof VariableDeclarator)) {
+            return null;
+        }
+        VariableDeclarator declarator = (VariableDeclarator) parent.get();
+        return declarator.getInitializer().isPresent() && declarator.getInitializer().get() == outermost
+                ? declarator.getNameAsString() : null;
+    }
+
+    /** 载体变量的后续链式使用（续链计入条件调用）与独立执行调用（mapper.selectList(w) 计入范围行）。 */
+    private static int extendByCarrierUsages(Expression outermost, int rootLine, String carrierVar,
+                                             List<LambdaCall> calls, BranchContext branchContext,
+                                             int rangeEnd) {
+        Optional<MethodDeclaration> container = outermost.findAncestor(MethodDeclaration.class);
+        if (!container.isPresent()) {
+            return rangeEnd;
+        }
+        List<MethodCallExpr> usages = new ArrayList<MethodCallExpr>();
+        for (MethodCallExpr call : container.get().findAll(MethodCallExpr.class)) {
+            if (chainReaches(call, carrierVar) && lineOf(call) > rootLine) {
+                usages.add(call);
+            } else {
+                rangeEnd = Math.max(rangeEnd, executionCallEnd(call, carrierVar));
+            }
+        }
+        Collections.sort(usages, CALL_ORDER);
+        for (MethodCallExpr usage : usages) {
+            calls.add(toCall(usage, branchContext.pathOf(usage)));
+            rangeEnd = Math.max(rangeEnd, endLineOf(usage));
+        }
+        return rangeEnd;
+    }
+
+    /** 独立执行调用：实参中出现载体变量 → 返回调用结束行，否则 0（不扩展范围）。 */
+    private static int executionCallEnd(MethodCallExpr call, String carrierVar) {
+        for (Expression arg : call.getArguments()) {
+            if (arg instanceof NameExpr && ((NameExpr) arg).getNameAsString().equals(carrierVar)) {
+                return endLineOf(call);
+            }
+        }
+        return 0;
     }
 
     /** UPDATE 链判定：LambdaUpdateWrapper / lambdaUpdate / set* 方法族；缺省按查询链。 */
     private static boolean isUpdateWrapper(Expression root, MethodCallExpr rootCall, String carrierVar,
                                            Map<String, String> declaredTypes) {
-        if (root instanceof ObjectCreationExpr) {
-            String type = ((ObjectCreationExpr) root).getType().getNameAsString();
-            if ("LambdaUpdateWrapper".equals(type)) {
-                return true;
-            }
-            if ("LambdaQueryWrapper".equals(type)) {
-                return false;
-            }
+        Boolean byRoot = rootTypeIsUpdate(root);
+        if (byRoot != null) {
+            return byRoot;
         }
-        if (rootCall != null) {
-            String name = rootCall.getNameAsString();
-            if ("lambdaUpdate".equals(name)) {
-                return true;
-            }
-            if ("lambdaQuery".equals(name)) {
-                return false;
-            }
-            Optional<Expression> scope = rootCall.getScope();
-            if (scope.isPresent() && scope.get() instanceof ObjectCreationExpr) {
-                return ((ObjectCreationExpr) scope.get()).getType().getNameAsString().contains("Update");
-            }
-            if (scope.isPresent() && scope.get() instanceof NameExpr) {
-                String declared = declaredTypes.get(((NameExpr) scope.get()).getNameAsString());
-                return declared != null && declared.startsWith("LambdaUpdateWrapper");
-            }
+        Boolean byCall = callIsUpdate(rootCall, declaredTypes);
+        if (byCall != null) {
+            return byCall;
         }
-        if (carrierVar != null) {
-            String declared = declaredTypes.get(carrierVar);
-            if (declared != null) {
-                return declared.startsWith("LambdaUpdateWrapper");
-            }
+        if (carrierVar == null) {
+            return false;
         }
-        return false;
+        String declared = declaredTypes.get(carrierVar);
+        return declared != null && declared.startsWith(TYPE_UPDATE_WRAPPER);
+    }
+
+    /** 构造式根类型判定：显式 Lambda*Wrapper → true/false；其他 → null（继续判定）。 */
+    private static Boolean rootTypeIsUpdate(Expression root) {
+        if (!(root instanceof ObjectCreationExpr)) {
+            return null;
+        }
+        String type = ((ObjectCreationExpr) root).getType().getNameAsString();
+        if (TYPE_UPDATE_WRAPPER.equals(type)) {
+            return Boolean.TRUE;
+        }
+        if (TYPE_QUERY_WRAPPER.equals(type)) {
+            return Boolean.FALSE;
+        }
+        return null;
+    }
+
+    /** 转换调用判定：lambdaUpdate/lambdaQuery 直判；接收者构造/声明类型判定；其余 → null（继续判定）。 */
+    private static Boolean callIsUpdate(MethodCallExpr rootCall, Map<String, String> declaredTypes) {
+        if (rootCall == null) {
+            return null;
+        }
+        String name = rootCall.getNameAsString();
+        if (METHOD_LAMBDA_UPDATE.equals(name)) {
+            return Boolean.TRUE;
+        }
+        if (METHOD_LAMBDA_QUERY.equals(name)) {
+            return Boolean.FALSE;
+        }
+        Optional<Expression> scope = rootCall.getScope();
+        if (!scope.isPresent()) {
+            return null;
+        }
+        if (scope.get() instanceof ObjectCreationExpr) {
+            return ((ObjectCreationExpr) scope.get()).getType().getNameAsString().contains("Update");
+        }
+        if (scope.get() instanceof NameExpr) {
+            String declared = declaredTypes.get(((NameExpr) scope.get()).getNameAsString());
+            return declared != null && declared.startsWith(TYPE_UPDATE_WRAPPER);
+        }
+        return null;
     }
 
     /** 链上调用（自 root 起向外，含 root 后的各级；root 为 MethodCallExpr 时排除其自身）。 */
@@ -298,13 +343,9 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
             current = scope.get();
         }
         Collections.reverse(reversed);
-        List<MethodCallExpr> out = new ArrayList<MethodCallExpr>();
-        for (MethodCallExpr call : reversed) {
-            if (call != root) {
-                out.add(call);
-            }
-        }
-        return out;
+        return reversed.stream()
+                .filter(call -> call != root)
+                .collect(Collectors.toList());
     }
 
     // ---------- 实体解析（优先级链 §5.5.4） ----------
@@ -338,33 +379,45 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
     }
 
     private static String explicitEntityOf(Expression root, MethodCallExpr rootCall) {
-        if (root instanceof ObjectCreationExpr) {
-            NodeList<Type> typeArgs = ((ObjectCreationExpr) root).getType().getTypeArguments().orElse(null);
-            if (typeArgs != null && !typeArgs.isEmpty()) {
-                return typeArgs.get(0).asString();
+        String byRoot = firstTypeArgumentOf(root); // ① new LambdaQueryWrapper<Order>()
+        if (byRoot != null) {
+            return byRoot;
+        }
+        return rootCall == null ? null : entityOfCall(rootCall);
+    }
+
+    private static String entityOfCall(MethodCallExpr rootCall) {
+        String byCall = firstOf(rootCall.getTypeArguments().orElse(null)); // 显式泛型 rootCall.<X>…
+        if (byCall != null) {
+            return byCall;
+        }
+        // new QueryWrapper<X>().lambda() / Wrapper.lambda()：泛型在转换调用的接收者构造上
+        Optional<Expression> scope = rootCall.getScope();
+        if (scope.isPresent() && scope.get() instanceof ObjectCreationExpr) {
+            String byScope = firstOf(
+                    ((ObjectCreationExpr) scope.get()).getType().getTypeArguments().orElse(null));
+            if (byScope != null) {
+                return byScope;
             }
         }
-        if (rootCall != null) {
-            NodeList<Type> callArgs = rootCall.getTypeArguments().orElse(null);
-            if (callArgs != null && !callArgs.isEmpty()) {
-                return callArgs.get(0).asString();
-            }
-            // new QueryWrapper<X>().lambda() / Wrapper.lambda()：泛型在转换调用的接收者构造上
-            Optional<Expression> scope = rootCall.getScope();
-            if (scope.isPresent() && scope.get() instanceof ObjectCreationExpr) {
-                NodeList<Type> creationArgs =
-                        ((ObjectCreationExpr) scope.get()).getType().getTypeArguments().orElse(null);
-                if (creationArgs != null && !creationArgs.isEmpty()) {
-                    return creationArgs.get(0).asString();
-                }
-            }
-            for (Expression arg : rootCall.getArguments()) {
-                if (arg instanceof ClassExpr) {
-                    return ((ClassExpr) arg).getType().asString();
-                }
+        for (Expression arg : rootCall.getArguments()) { // ② Class 字面量参数
+            if (arg instanceof ClassExpr) {
+                return ((ClassExpr) arg).getType().asString();
             }
         }
         return null;
+    }
+
+    private static String firstTypeArgumentOf(Expression root) {
+        if (!(root instanceof ObjectCreationExpr)) {
+            return null;
+        }
+        return firstOf(((ObjectCreationExpr) root).getType().getTypeArguments().orElse(null));
+    }
+
+    /** 泛型实参列表首个（null/空 → null）。 */
+    private static String firstOf(NodeList<Type> typeArgs) {
+        return typeArgs == null || typeArgs.isEmpty() ? null : typeArgs.get(0).asString();
     }
 
     private static String entityOfReceiver(String receiver, Map<String, String> declaredTypes,
@@ -412,43 +465,49 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
 
     // ---------- 参数型 wrapper（D11：还原不完整） ----------
 
-    private static List<LambdaChainModel> paramWrapperModels(CompilationUnit cu, EntityIndex entityIndex,
-                                                             String filePath) {
+    private static List<LambdaChainModel> paramWrapperModels(CompilationUnit cu, String filePath) {
         List<LambdaChainModel> out = new ArrayList<LambdaChainModel>();
         for (MethodDeclaration method : cu.findAll(MethodDeclaration.class)) {
             for (Parameter parameter : method.getParameters()) {
-                if (!parameter.getType().isClassOrInterfaceType()) {
-                    continue;
-                }
-                ClassOrInterfaceType type = parameter.getType().asClassOrInterfaceType();
-                if (!DIRECT_WRAPPER_TYPES.contains(type.getNameAsString())) {
-                    continue;
-                }
-                List<MethodCallExpr> usages = new ArrayList<MethodCallExpr>();
-                for (MethodCallExpr call : method.findAll(MethodCallExpr.class)) {
-                    if (chainReaches(call, parameter.getNameAsString())) {
-                        usages.add(call);
-                    }
-                }
-                if (usages.isEmpty()) {
-                    continue;
-                }
-                Collections.sort(usages, CALL_ORDER);
-                List<LambdaCall> calls = new ArrayList<LambdaCall>();
-                int rootLine = lineOf(usages.get(0));
-                int rangeEnd = rootLine;
-                for (MethodCallExpr usage : usages) {
-                    calls.add(toCall(usage));
-                    rangeEnd = Math.max(rangeEnd, endLineOf(usage));
-                }
-                String entity = type.getTypeArguments().isPresent() && !type.getTypeArguments().get().isEmpty()
-                        ? type.getTypeArguments().get().get(0).asString()
-                        : null;
-                out.add(new LambdaChainModel(filePath, rootLine, rangeEnd, entity, calls, true,
-                        "LambdaUpdateWrapper".equals(type.getNameAsString())));
+                paramWrapperModel(method, parameter, filePath).ifPresent(out::add);
             }
         }
         return out;
+    }
+
+    /** 直接包装类型参数（D11：还原不完整）→ 模型；非目标类型 / 无链式使用 → empty。 */
+    private static Optional<LambdaChainModel> paramWrapperModel(MethodDeclaration method, Parameter parameter,
+                                                                String filePath) {
+        ClassOrInterfaceType type = wrapperParamType(parameter);
+        if (type == null) {
+            return Optional.empty();
+        }
+        List<MethodCallExpr> usages = method.findAll(MethodCallExpr.class).stream()
+                .filter(call -> chainReaches(call, parameter.getNameAsString()))
+                .sorted(CALL_ORDER)
+                .collect(Collectors.toCollection(ArrayList::new));
+        if (usages.isEmpty()) {
+            return Optional.empty();
+        }
+        List<LambdaCall> calls = new ArrayList<LambdaCall>();
+        int rootLine = lineOf(usages.get(0));
+        int rangeEnd = rootLine;
+        for (MethodCallExpr usage : usages) {
+            calls.add(toCall(usage));
+            rangeEnd = Math.max(rangeEnd, endLineOf(usage));
+        }
+        return Optional.of(new LambdaChainModel(filePath, rootLine, rangeEnd,
+                firstOf(type.getTypeArguments().orElse(null)), calls, true,
+                TYPE_UPDATE_WRAPPER.equals(type.getNameAsString())));
+    }
+
+    /** 参数类型为直接包装类型时返回其类型节点；否则 null。 */
+    private static ClassOrInterfaceType wrapperParamType(Parameter parameter) {
+        if (!parameter.getType().isClassOrInterfaceType()) {
+            return null;
+        }
+        ClassOrInterfaceType type = parameter.getType().asClassOrInterfaceType();
+        return DIRECT_WRAPPER_TYPES.contains(type.getNameAsString()) ? type : null;
     }
 
     // ---------- 调用与参数 ----------
@@ -500,18 +559,11 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
             return Collections.emptyList();
         }
         String paramName = lambda.getParameter(0).getNameAsString();
-        List<MethodCallExpr> calls = new ArrayList<MethodCallExpr>();
-        for (MethodCallExpr inner : lambda.findAll(MethodCallExpr.class)) {
-            if (chainReaches(inner, paramName)) {
-                calls.add(inner);
-            }
-        }
-        Collections.sort(calls, CALL_ORDER);
-        List<LambdaCall> out = new ArrayList<LambdaCall>();
-        for (MethodCallExpr inner : calls) {
-            out.add(toCall(inner));
-        }
-        return out;
+        return lambda.findAll(MethodCallExpr.class).stream()
+                .filter(inner -> chainReaches(inner, paramName))
+                .sorted(CALL_ORDER)
+                .map(LambdaSqlExtractor::toCall)
+                .collect(Collectors.toList());
     }
 
     static LambdaArg toArg(Expression expr) {
@@ -708,11 +760,9 @@ public final class LambdaSqlExtractor implements SqlSourceExtractor {
             if (entry.getLabels().isEmpty()) {
                 return "default";
             }
-            List<String> parts = new ArrayList<String>();
-            for (Expression label : entry.getLabels()) {
-                parts.add(label.toString());
-            }
-            return "case " + String.join(", ", parts);
+            return "case " + entry.getLabels().stream()
+                    .map(Expression::toString)
+                    .collect(Collectors.joining(", "));
         }
     }
 }

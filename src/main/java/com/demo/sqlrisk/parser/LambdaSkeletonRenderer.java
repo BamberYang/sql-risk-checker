@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Lambda 骨架渲染（详细设计 §10.3）：将 {@link LambdaChainModel} 还原为 SQL 骨架文本。
@@ -38,6 +39,10 @@ public final class LambdaSkeletonRenderer {
             "comment", "hints", "setEntityClass", "setParamAlias"));
 
     private static final Pattern APPLY_PLACEHOLDER = Pattern.compile("\\{\\d+\\}");
+
+    private static final String METHOD_SET_INCR_BY = "setIncrBy";
+    private static final String METHOD_SET_DECR_BY = "setDecrBy";
+    private static final String AND_CONNECTOR = " AND ";
 
     private LambdaSkeletonRenderer() {
     }
@@ -137,31 +142,56 @@ public final class LambdaSkeletonRenderer {
     private static List<LambdaCall> filterCalls(LambdaChainModel chain, int[] combo, PredicateBuilder where) {
         List<LambdaCall> included = new ArrayList<LambdaCall>();
         for (LambdaCall call : chain.calls()) {
-            LambdaBranchRef decidingRef = null;
-            boolean conservative = false;
-            for (LambdaBranchRef ref : call.branchPath()) {
-                boolean excluded = ref.pathIndex() < 0 || combo[ref.groupId()] != ref.pathIndex();
-                if (!excluded) {
-                    continue;
-                }
-                if (ref.pathIndex() < 0) {
-                    conservative = true;
-                }
-                if (decidingRef == null) {
-                    decidingRef = ref; // 最外层排除因（溯源用）
-                }
-            }
-            if (decidingRef == null) {
+            Exclusion exclusion = exclusionOf(call, combo);
+            if (exclusion == null) {
                 included.add(call);
-                continue;
+            } else {
+                where.dropped.add(new DroppedBranch(
+                        branchTypeOf(chain.branchGroups(), exclusion.decidingRef()),
+                        exclusion.conservative() ? DroppedBranch.Reason.CONSERVATIVE_FALSE
+                                : DroppedBranch.Reason.RUNTIME_CONDITION,
+                        roleOf(call), call.method() + "()"));
             }
-            where.dropped.add(new DroppedBranch(
-                    branchTypeOf(chain.branchGroups(), decidingRef),
-                    conservative ? DroppedBranch.Reason.CONSERVATIVE_FALSE
-                            : DroppedBranch.Reason.RUNTIME_CONDITION,
-                    roleOf(call), call.method() + "()"));
         }
         return included;
+    }
+
+    /** 调用在分支组合下的排除因；null = 未排除。 */
+    private static Exclusion exclusionOf(LambdaCall call, int[] combo) {
+        LambdaBranchRef decidingRef = null;
+        boolean conservative = false;
+        for (LambdaBranchRef ref : call.branchPath()) {
+            if (ref.pathIndex() >= 0 && combo[ref.groupId()] == ref.pathIndex()) {
+                continue; // 选中分支
+            }
+            if (ref.pathIndex() < 0) {
+                conservative = true; // 恒不成立（循环体/无 else 的 if 内）
+            }
+            if (decidingRef == null) {
+                decidingRef = ref; // 最外层排除因（溯源用）
+            }
+        }
+        return decidingRef == null ? null : new Exclusion(decidingRef, conservative);
+    }
+
+    /** 排除因：最外层决定分支 + 是否恒不成立。 */
+    private static final class Exclusion {
+
+        private final LambdaBranchRef decidingRef;
+        private final boolean conservative;
+
+        Exclusion(LambdaBranchRef decidingRef, boolean conservative) {
+            this.decidingRef = decidingRef;
+            this.conservative = conservative;
+        }
+
+        LambdaBranchRef decidingRef() {
+            return decidingRef;
+        }
+
+        boolean conservative() {
+            return conservative;
+        }
     }
 
     /** switch 默认条目 → OTHERWISE，其余 case 路径 → WHEN；if/循环 → IF（对齐 XML 分支类型）。 */
@@ -176,17 +206,15 @@ public final class LambdaSkeletonRenderer {
 
     private static DroppedBranch.Role roleOf(LambdaCall call) {
         String method = call.method();
-        return "set".equals(method) || "setIncrBy".equals(method) || "setDecrBy".equals(method)
+        return "set".equals(method) || METHOD_SET_INCR_BY.equals(method) || METHOD_SET_DECR_BY.equals(method)
                 ? DroppedBranch.Role.SET : DroppedBranch.Role.CONDITION;
     }
 
     private static String strategyTag(List<LambdaBranchGroup> groups, int[] combo) {
-        List<String> parts = new ArrayList<String>();
-        for (LambdaBranchGroup group : groups) {
-            if (group.enumerable()) {
-                parts.add(group.pathLabels().get(combo[group.groupId()]));
-            }
-        }
+        List<String> parts = groups.stream()
+                .filter(LambdaBranchGroup::enumerable)
+                .map(group -> group.pathLabels().get(combo[group.groupId()]))
+                .collect(Collectors.toList());
         return parts.isEmpty() ? SqlSkeleton.TAG_BASE : "branch:" + String.join(", ", parts);
     }
 
@@ -195,151 +223,215 @@ public final class LambdaSkeletonRenderer {
     private static void applyCalls(List<LambdaCall> calls, PredicateBuilder pb, TopLevel top,
                                    EntityMeta entity) {
         for (LambdaCall call : calls) {
-            if (call.runtimeConditional()) {
-                // 保守策略：运行期条件视为不成立 → 整体丢弃（复用 IF 语义，见 DroppedBranch javadoc）
-                pb.dropped.add(new DroppedBranch(DroppedBranch.BranchType.IF,
-                        DroppedBranch.Reason.RUNTIME_CONDITION, DroppedBranch.Role.CONDITION,
-                        call.method() + "()"));
-                continue;
-            }
-            String method = call.method();
-            boolean noArg = call.args().isEmpty() && call.nested().isEmpty();
+            applyCall(call, pb, top, entity);
+        }
+    }
 
-            if ("or".equals(method) && noArg) {
-                if (pb.any) {
-                    pb.connector = " OR ";
+    /** 单调用归约：运行期条件 → 连接符 → Consumer 组 → 比较 → 具名子句。 */
+    private static void applyCall(LambdaCall call, PredicateBuilder pb, TopLevel top, EntityMeta entity) {
+        if (call.runtimeConditional()) {
+            // 保守策略：运行期条件视为不成立 → 整体丢弃（复用 IF 语义，见 DroppedBranch javadoc）
+            pb.dropped.add(new DroppedBranch(DroppedBranch.BranchType.IF,
+                    DroppedBranch.Reason.RUNTIME_CONDITION, DroppedBranch.Role.CONDITION,
+                    call.method() + "()"));
+            return;
+        }
+        String method = call.method();
+        if (isNoArgConnector(call, "or")) {
+            pb.switchConnector(" OR ");
+            return;
+        }
+        if (isNoArgConnector(call, "and")) {
+            pb.switchConnector(AND_CONNECTOR);
+            return;
+        }
+        if (CONSUMER_GROUP_METHODS.contains(method) && !call.nested().isEmpty()) {
+            applyGroup(call, pb, entity);
+            return;
+        }
+        if (COMPARISON_OPS.contains(method)) {
+            pb.add(renderComparison(call, entity, pb));
+            return;
+        }
+        applyClauseCall(call, method, pb, top, entity);
+    }
+
+    /** 无参 and()/or()（无实参且无嵌套组）。 */
+    private static boolean isNoArgConnector(LambdaCall call, String name) {
+        return name.equals(call.method()) && call.args().isEmpty() && call.nested().isEmpty();
+    }
+
+    /** Consumer 组（and/or/nested/func(λ)）：组内独立组装后以括号并入。 */
+    private static void applyGroup(LambdaCall call, PredicateBuilder pb, EntityMeta entity) {
+        PredicateBuilder group = new PredicateBuilder();
+        applyCalls(call.nested(), group, null, entity);
+        pb.mergeSignalsFrom(group);
+        if (group.any) {
+            pb.add("(" + group.text + ")");
+        }
+    }
+
+    /** 具名子句分发（顺序：比较关键词 → 字面量片段 → 顶层从句 → SET 族；均非本组 → unknown）。 */
+    private static void applyClauseCall(LambdaCall call, String method, PredicateBuilder pb,
+                                        TopLevel top, EntityMeta entity) {
+        if (applyComparisonKeywords(call, method, pb, entity)
+                || applyLiteralKeywords(call, method, pb, entity)
+                || applyTopClauses(call, method, pb, top, entity)
+                || applySetClauses(call, method, pb, top, entity)) {
+            return;
+        }
+        if (!IGNORED_METHODS.contains(method)) {
+            pb.unknown = true; // DD-8：未收录方法不猜测语义
+        }
+    }
+
+    /** 关键词谓词：BETWEEN / IS NULL / IN；false = 非本组方法。 */
+    private static boolean applyComparisonKeywords(LambdaCall call, String method, PredicateBuilder pb,
+                                                   EntityMeta entity) {
+        switch (method) {
+            case "between":
+            case "notBetween":
+                pb.add(columnOf(firstArg(call), entity, pb)
+                        + ("between".equals(method) ? " BETWEEN ? AND ?" : " NOT BETWEEN ? AND ?"));
+                return true;
+            case "isNull":
+            case "isNotNull":
+                pb.add(columnOf(firstArg(call), entity, pb)
+                        + ("isNull".equals(method) ? " IS NULL" : " IS NOT NULL"));
+                return true;
+            case "in":
+            case "notIn":
+                pb.add(columnOf(firstArg(call), entity, pb)
+                        + ("in".equals(method) ? " IN (?)" : " NOT IN (?)"));
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** 字面量片段谓词：IN SQL / EXISTS / APPLY（片段非字面量 → unknown，不猜测）。 */
+    private static boolean applyLiteralKeywords(LambdaCall call, String method, PredicateBuilder pb,
+                                                EntityMeta entity) {
+        if ("apply".equals(method)) {
+            appendApply(call, pb);
+            return true;
+        }
+        if (!isLiteralKeyword(method)) {
+            return false;
+        }
+        String raw = isSqlKeyword(method) ? literalText(secondArg(call)) : literalText(firstArg(call));
+        if (raw == null) {
+            pb.unknown = true;
+            return true;
+        }
+        pb.add(predicateTextOf(method, call, entity, pb, raw));
+        return true;
+    }
+
+    private static boolean isLiteralKeyword(String method) {
+        return isSqlKeyword(method) || "exists".equals(method) || "notExists".equals(method);
+    }
+
+    private static boolean isSqlKeyword(String method) {
+        return "inSql".equals(method) || "notInSql".equals(method);
+    }
+
+    /** 片段谓词文本：{@code inSql → 列 IN (raw)}；{@code exists → EXISTS (raw)}。 */
+    private static String predicateTextOf(String method, LambdaCall call, EntityMeta entity,
+                                          PredicateBuilder pb, String raw) {
+        if (isSqlKeyword(method)) {
+            return columnOf(firstArg(call), entity, pb)
+                    + ("inSql".equals(method) ? " IN (" : " NOT IN (") + raw + ")";
+        }
+        return ("exists".equals(method) ? "EXISTS (" : "NOT EXISTS (") + raw + ")";
+    }
+
+    private static void appendApply(LambdaCall call, PredicateBuilder pb) {
+        String raw = literalText(firstArg(call));
+        if (raw == null) {
+            pb.unknown = true;
+            return;
+        }
+        pb.add(APPLY_PLACEHOLDER.matcher(raw).replaceAll("?"));
+    }
+
+    /** 顶层从句：SELECT 列 / GROUP BY / ORDER BY / HAVING；false = 非本组方法。 */
+    private static boolean applyTopClauses(LambdaCall call, String method, PredicateBuilder pb,
+                                           TopLevel top, EntityMeta entity) {
+        switch (method) {
+            case "select":
+                appendColumnArgs(call, entity, top == null ? null : top.selectColumns, pb, null);
+                return true;
+            case "groupBy":
+                appendColumnArgs(call, entity, top == null ? null : top.groupBy, pb, null);
+                return true;
+            case "orderByAsc":
+                appendColumnArgs(call, entity, top == null ? null : top.orderBy, pb, "ASC");
+                return true;
+            case "orderByDesc":
+                appendColumnArgs(call, entity, top == null ? null : top.orderBy, pb, "DESC");
+                return true;
+            case "having": {
+                String raw = literalText(firstArg(call));
+                if (top == null || raw == null) {
+                    pb.unknown = true;
+                } else {
+                    top.having.add(raw);
                 }
-                continue;
+                return true;
             }
-            if ("and".equals(method) && noArg) {
-                if (pb.any) {
-                    pb.connector = " AND ";
+            default:
+                return false;
+        }
+    }
+
+    /** UPDATE 子句：SET 项族与 last 后缀；false = 非本组方法。 */
+    private static boolean applySetClauses(LambdaCall call, String method, PredicateBuilder pb,
+                                           TopLevel top, EntityMeta entity) {
+        switch (method) {
+            case "set":
+                addSetItem(top, pb, columnOf(firstArg(call), entity, pb) + " = ?");
+                return true;
+            case "setSql": {
+                String raw = literalText(firstArg(call));
+                if (raw == null) {
+                    pb.unknown = true;
+                } else {
+                    addSetItem(top, pb, raw);
                 }
-                continue;
+                return true;
             }
-            if (CONSUMER_GROUP_METHODS.contains(method) && !call.nested().isEmpty()) {
-                PredicateBuilder group = new PredicateBuilder();
-                applyCalls(call.nested(), group, null, entity);
-                pb.mergeSignalsFrom(group);
-                if (group.any) {
-                    pb.add("(" + group.text + ")");
+            case "setIncrBy":
+            case "setDecrBy":
+                addSetItem(top, pb, incrementItem(call, method, entity, pb));
+                return true;
+            case "last": {
+                String raw = literalText(firstArg(call));
+                if (top == null || raw == null) {
+                    pb.unknown = true;
+                } else {
+                    top.lastSuffix = top.lastSuffix == null ? raw : top.lastSuffix + " " + raw;
                 }
-                continue;
+                return true;
             }
-            if (COMPARISON_OPS.contains(method)) {
-                pb.add(renderComparison(call, entity, pb));
-                continue;
-            }
-            switch (method) {
-                case "between":
-                case "notBetween":
-                    pb.add(columnOf(firstArg(call), entity, pb)
-                            + ("between".equals(method) ? " BETWEEN ? AND ?" : " NOT BETWEEN ? AND ?"));
-                    break;
-                case "isNull":
-                case "isNotNull":
-                    pb.add(columnOf(firstArg(call), entity, pb)
-                            + ("isNull".equals(method) ? " IS NULL" : " IS NOT NULL"));
-                    break;
-                case "in":
-                case "notIn":
-                    pb.add(columnOf(firstArg(call), entity, pb)
-                            + ("in".equals(method) ? " IN (?)" : " NOT IN (?)"));
-                    break;
-                case "inSql":
-                case "notInSql": {
-                    String raw = literalText(secondArg(call));
-                    if (raw == null) {
-                        pb.unknown = true;
-                    } else {
-                        pb.add(columnOf(firstArg(call), entity, pb)
-                                + ("inSql".equals(method) ? " IN (" : " NOT IN (") + raw + ")");
-                    }
-                    break;
-                }
-                case "exists":
-                case "notExists": {
-                    String raw = literalText(firstArg(call));
-                    if (raw == null) {
-                        pb.unknown = true;
-                    } else {
-                        pb.add(("exists".equals(method) ? "EXISTS (" : "NOT EXISTS (") + raw + ")");
-                    }
-                    break;
-                }
-                case "apply": {
-                    String raw = literalText(firstArg(call));
-                    if (raw == null) {
-                        pb.unknown = true;
-                    } else {
-                        pb.add(APPLY_PLACEHOLDER.matcher(raw).replaceAll("?"));
-                    }
-                    break;
-                }
-                case "select":
-                    appendColumnArgs(call, entity, top == null ? null : top.selectColumns, pb, null);
-                    break;
-                case "groupBy":
-                    appendColumnArgs(call, entity, top == null ? null : top.groupBy, pb, null);
-                    break;
-                case "orderByAsc":
-                    appendColumnArgs(call, entity, top == null ? null : top.orderBy, pb, "ASC");
-                    break;
-                case "orderByDesc":
-                    appendColumnArgs(call, entity, top == null ? null : top.orderBy, pb, "DESC");
-                    break;
-                case "having": {
-                    String raw = literalText(firstArg(call));
-                    if (top != null && raw != null) {
-                        top.having.add(raw);
-                    } else {
-                        pb.unknown = true;
-                    }
-                    break;
-                }
-                case "set": {
-                    String col = columnOf(firstArg(call), entity, pb);
-                    if (top != null) {
-                        top.setItems.add(col + " = ?");
-                    } else {
-                        pb.unknown = true;
-                    }
-                    break;
-                }
-                case "setSql": {
-                    String raw = literalText(firstArg(call));
-                    if (top != null && raw != null) {
-                        top.setItems.add(raw);
-                    } else {
-                        pb.unknown = true;
-                    }
-                    break;
-                }
-                case "setIncrBy":
-                case "setDecrBy": {
-                    String col = columnOf(firstArg(call), entity, pb);
-                    if (top != null) {
-                        top.setItems.add(col + " = " + col + ("setIncrBy".equals(method) ? " + ?" : " - ?"));
-                    } else {
-                        pb.unknown = true;
-                    }
-                    break;
-                }
-                case "last": {
-                    String raw = literalText(firstArg(call));
-                    if (top != null && raw != null) {
-                        top.lastSuffix = top.lastSuffix == null ? raw : top.lastSuffix + " " + raw;
-                    } else {
-                        pb.unknown = true;
-                    }
-                    break;
-                }
-                default:
-                    if (!IGNORED_METHODS.contains(method)) {
-                        pb.unknown = true; // DD-8：未收录方法不猜测语义
-                    }
-                    break;
-            }
+            default:
+                return false;
+        }
+    }
+
+    /** SET 增减项：{@code 列 = 列 + ?} / {@code 列 = 列 - ?}。 */
+    private static String incrementItem(LambdaCall call, String method, EntityMeta entity,
+                                        PredicateBuilder pb) {
+        String col = columnOf(firstArg(call), entity, pb);
+        return col + " = " + col + (METHOD_SET_INCR_BY.equals(method) ? " + ?" : " - ?");
+    }
+
+    /** SET 项加入（top 缺失 → unknown，保守）。 */
+    private static void addSetItem(TopLevel top, PredicateBuilder pb, String item) {
+        if (top == null) {
+            pb.unknown = true;
+        } else {
+            top.setItems.add(item);
         }
     }
 
@@ -430,7 +522,7 @@ public final class LambdaSkeletonRenderer {
     private static final class PredicateBuilder {
 
         final StringBuilder text = new StringBuilder();
-        String connector = " AND ";
+        String connector = AND_CONNECTOR;
         boolean any;
         boolean unknown;
         boolean leadingWildcard;
@@ -442,6 +534,13 @@ public final class LambdaSkeletonRenderer {
             }
             text.append(predicate);
             any = true;
+        }
+
+        /** 无参 or()/and()：切换后续连接符（无既有谓词时无效果）。 */
+        void switchConnector(String newConnector) {
+            if (any) {
+                connector = newConnector;
+            }
         }
 
         void mergeSignalsFrom(PredicateBuilder group) {
@@ -467,7 +566,7 @@ public final class LambdaSkeletonRenderer {
                 sb.append(" GROUP BY ").append(String.join(", ", groupBy));
             }
             if (!having.isEmpty()) {
-                sb.append(" HAVING ").append(String.join(" AND ", having));
+                sb.append(" HAVING ").append(String.join(AND_CONNECTOR, having));
             }
             if (!orderBy.isEmpty()) {
                 sb.append(" ORDER BY ").append(String.join(", ", orderBy));

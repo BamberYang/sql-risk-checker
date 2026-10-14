@@ -16,7 +16,7 @@ public interface AnnoMapper {
     class SqlBuilder {
         public String dynamic(String kw) {
             StringBuilder sb = new StringBuilder("SELECT id, status FROM t_order WHERE 1 = 1");
-            if (kw != null && kw.length() > 0) {
+            if (kw != null && !kw.isEmpty()) {
                 sb.append(" AND name LIKE '%").append(kw).append("%'");
             }
             return sb.toString();

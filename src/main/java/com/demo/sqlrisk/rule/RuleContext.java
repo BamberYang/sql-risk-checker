@@ -42,9 +42,17 @@ public final class RuleContext {
         return parsedSql;
     }
 
-    /** 可为 null（语句级短路规则无骨架事实）。 */
+    /**
+     * 骨架事实（骨架级规则的唯一事实入口）。
+     *
+     * <p>语句级短路规则（{@code parsedSql == null}）不存在骨架事实，误用即抛（fail fast）；
+     * 引擎 {@code safeCheck} 兜底为 stderr 警告并跳过该规则。</p>
+     */
     public QueryFacts facts() {
-        return parsedSql == null ? null : parsedSql.facts();
+        if (parsedSql == null) {
+            throw new IllegalStateException("语句级上下文无骨架事实（仅短路规则可用 rawText/文本级 API）");
+        }
+        return parsedSql.facts();
     }
 
     public StatementMeta meta() {

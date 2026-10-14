@@ -77,9 +77,9 @@ class RuleEngineTest {
     @Test
     void skeleton_loop_stops_at_first_hit() {
         // 骨架 #0：L4 命中（LOW）；骨架 #1：若被评估将命中 H1（HIGH）——引擎必须在 #0 停止（AC-4）
-        ParsedSql skeleton0 = RuleTestSupport.parsedSql("SELECT id FROM t_order WHERE id = 1",
+        ParsedSql skeleton0 = RuleTestSupport.parsedSql(
                 RuleTestSupport.orderMetadata(), SqlSkeleton.base("SELECT id FROM t_order WHERE id = 1"));
-        ParsedSql skeleton1 = RuleTestSupport.parsedSql("UPDATE t_order SET status = 1",
+        ParsedSql skeleton1 = RuleTestSupport.parsedSql(
                 RuleTestSupport.orderMetadata(), SqlSkeleton.base("UPDATE t_order SET status = 1"));
         ParsedStatement statement = RuleTestSupport.parsedStatement(Arrays.asList(skeleton0, skeleton1),
                 "raw-container");

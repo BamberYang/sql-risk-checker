@@ -30,9 +30,6 @@ final class RuleSupport {
      */
     static String conservativeNote(RuleContext ctx) {
         QueryFacts facts = ctx.facts();
-        if (facts == null) {
-            return "";
-        }
         for (DroppedBranch branch : facts.droppedBranches()) {
             if (branch.role() == DroppedBranch.Role.CONDITION) {
                 return "（WHERE 条件位于动态分支内，按保守策略视为不成立）";
