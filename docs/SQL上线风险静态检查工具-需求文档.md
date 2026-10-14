@@ -9,7 +9,15 @@
 | 项    | 内容                 |
 | ---- | ------------------ |
 | 文档名称 | SQL 上线风险静态检查工具需求文档 |
-| 版本   | v1.0               |
+| 版本   | v1.1               |
+| 日期   | 2026-10-15         |
+
+修订记录：
+
+| 版本   | 日期         | 变更内容                                                                  |
+| ---- | ---------- | --------------------------------------------------------------------- |
+| v1.0 | 2026-10-13 | 首版                                                                    |
+| v1.1 | 2026-10-15 | 扩展需求：新增 FR-8「数据库元数据加载」（移除文件元数据通道）、FR-9「多数据库与多方言」（预留扩展点）；同步 §4/§6/§9/§10/§11/§12/§13/§14/§15/§16 |
 
 
 
@@ -53,6 +61,10 @@
 
 6. 支持通过 **statement id** 配置忽略白名单。
 
+7. 表元数据（表 / 字段类型 / 索引）**从数据库实时读取**（运行时加载一次），替代静态文件提供。
+
+8. 支持**多数据库 / 多方言**：v1 实现 MySQL，Oracle、PostgreSQL 等预留扩展点（见 FR-9）。
+
 
 
 ***
@@ -82,7 +94,8 @@
 | 非目标项                      | 说明            | 处理方式               |
 | ------------------------- | ------------- | ------------------ |
 | 生产 commit id 自动获取         | 可先不实现         | 本版由**外部输入**传入，接口预留 |
-| SQL 执行计划分析                | 暂时不连数据库       | 本版本不实现，预留实现路径      |
+| SQL 执行计划分析                | 只连库读元数据，不执行 EXPLAIN / 不执行业务 SQL | 本版本不实现，预留实现路径 |
+| Oracle / PostgreSQL 等完整方言支持 | 本版实现 MySQL 基线  | 预留扩展点（FR-9），暂不实现 |
 | 删除类 SQL 分析                | 不需要分析         | 不做                 |
 | CI/CD/ Maven / 代码评审平台自动接入 | 本版仅 `main` 触发 | 预留扩展点，不做集成         |
 | 非 SQL 类风险检查（代码规范、安全漏洞等）   | 工具定位为 SQL 专项  | 不做                 |
@@ -119,10 +132,11 @@
 ① 输入装配                ② 差异获取         ③ SQL 提取          ④ 解析与规范化
 [当前分支commit]  ──┐
 [生产commit(可选)] ──┼─►  已输入 prod-commit ? → git diff
-[配置文件]       ──┘         未输入           → 全量扫描仓库
+[配置文件]       ──┤         未输入           → 全量扫描仓库
+[数据库(元数据)]  ──┘
                                       │
                                       ▼
-                      提取新增/修改的 statement(SQL)  →  解析为 AST
+                      提取新增/修改的 statement(SQL)  →  按方言解析为 AST
                                       │
                                       ▼
 ⑤ 风险规则分析      ⑥ 白名单过滤      ⑦ 结果汇总
@@ -255,14 +269,45 @@
 | `--repo <path>`       | 是  | 目标 Git 仓库绝对路径                                   |
 | `--head-commit <sha>` | 否  | 当前分支最新 commit，缺省取当前工作区 HEAD                     |
 | `--prod-commit <sha>` | 否  | 生产 commit id（本版外部输入）；**不传时对仓库进行全量分析**           |
-| `--config <path>`     | 否  | 规则 / 白名单配置文件路径，缺省用默认配置                          |
+| `--config <path>`     | 否  | 规则 / 白名单 / 数据库连接配置文件路径，缺省用默认配置                  |
 | `--output <path>`     | 否  | 报告输出目录，缺省输出到当前目录                                |
 | `--format json`       | 否  | 指定结构化输出（默认控制台 + JSON 双输出）                       |
-| `--metadata <path>`   | 否  | 表元数据 JSON 文件路径；缺省读取仓库根 `sql-risk-metadata.json` |
-
-
+| `--dialect <name>`    | 否  | SQL 方言，缺省 `mysql`；`oracle`/`postgresql` 为预留值（见 FR-9） |
+| `--db-url <jdbc-url>` | 条件 | 数据库 JDBC URL（元数据来源）；未提供时读 yaml `datasource.url` |
+| `--db-username <u>`   | 条件 | 数据库账号；未提供时读 yaml                          |
+| `--db-password <pwd>` | 否  | 数据库密码（不建议明文）；未提供时读环境变量 `SQL_RISK_DB_PASSWORD`，再读 yaml |
 
 * 退出码约定：`0` 无高危；`1` 存在高危风险；`2` 参数 / 环境错误（便于程序化判断）。
+
+
+
+### FR-8 数据库元数据加载（2026-10-15 扩展）
+
+
+
+* **元数据来源**：表 / 字段类型 / 索引信息不再由 JSON 文件提供；工具启动时通过 JDBC 从数据库读取**一次**，进程内缓存复用，运行期内**不重复加载**。
+
+* **连接配置**：yaml `datasource` 段（url / username / password / connection_timeout_seconds）为主，CLI 参数覆盖；密码优先级：**CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml**。JDBC 驱动直接在 pom 中引用（随包分发），无需配置驱动路径。
+
+* **只读使用**：连接仅用于读取元数据（`DatabaseMetaData` / information_schema），加载完成后即关闭；**不执行任何业务 SQL**。
+
+* **失败语义**：连接失败 / 账号权限不足 / 元数据查询失败 / 超时 → 明确错误信息 + exit 2（JDBC 驱动以 Maven 依赖随包内置，见 §12）。
+
+* **通道移除**：原 `--metadata` 参数与 yaml `metadata_file` 键**移除**（后者出现时告警忽略，不静默生效）。
+
+
+
+### FR-9 多数据库与多方言（扩展，预留实现）
+
+
+
+* **解析按方言进行**：SQL 解析器按配置的 `dialect` 工作；默认 `mysql`。
+
+* **预留扩展点**：`SqlDialect` SPI——方言名 + 底层解析器 DbType 映射 + 分页/限制子句识别能力（影响 H3/L4 判定，如 MySQL `LIMIT`、Oracle `ROWNUM`/`FETCH FIRST`、PostgreSQL `LIMIT`/`FETCH FIRST`）。
+
+* **新增方言的扩展成本**：实现 `SqlDialect` + 注册 + 用例，不改动核心流程与规则。
+
+* **未支持值语义**：v1 配置 `oracle`/`postgresql` 等未实现值 → **报错 exit 2**（明确报错，不静默降级为 MySQL 解析）。
 
 
 
@@ -319,7 +364,7 @@
 
 ## 9. 配置设计
 
-采用 `properties` 或 `yaml`（【假设】默认 `yaml`，可扩展）承载规则、白名单等配置；**表元数据除外**—— 使用独立的 **JSON 文件**（`table-metadata.json`）描述，不放入 yaml（见 9.1）。yaml 中仅通过 `metadata_file` 指定该 JSON 文件路径。
+采用 `properties` 或 `yaml`（【假设】默认 `yaml`，可扩展）承载规则、白名单与**数据库连接**等配置；表元数据本身不再落任何文件，由工具连接数据库**运行时读取一次**（见 9.1、FR-8）。
 
 
 
@@ -333,8 +378,15 @@ rules:
     level: MEDIUM
     enabled: true
 
-# 表元数据：由独立的 JSON 文件提供（见 9.1），此处仅指定文件路径
-metadata_file: ./table-metadata.json
+# 数据库连接（元数据来源；加载一次、只读、加载后即关闭）
+datasource:
+  url: "jdbc:mysql://127.0.0.1:3306/union_order"
+  username: "readonly"
+  password: ""                    # 建议留空，用环境变量 SQL_RISK_DB_PASSWORD 或 --db-password 提供
+  connection_timeout_seconds: 10  # 可选，缺省 10
+
+# SQL 方言（v1 仅 mysql；oracle/postgresql 预留，配置未实现值直接报错）
+dialect: mysql
 
 # 低危不推荐写法关键字表
 low_risk_keywords:
@@ -346,57 +398,23 @@ whitelist:
   statements:
     - "com.demo.mapper.OrderMapper.selectById"   # 精确
     - "com.demo.mapper.*"                          # 前缀
-
-# 保守策略开关（默认 true）
-conservative_if_always_false: true
-
-# 批量阈值（M7 参考，仅针对 UPDATE/DELETE，不含 INSERT）
-bulk_operation_threshold: 1000
 ```
 
-### 9.1 表元数据（独立 JSON 文件）
+> 已移除键（配置中出现时告警并忽略，不静默生效）：`metadata_file`（文件元数据通道已移除，见 FR-8）、`conservative_if_always_false`、`bulk_operation_threshold`。
 
-表元数据使用独立的 JSON 文件描述（**不在 yaml 中配置**），由 `--metadata <path>` 或 yaml 的 `metadata_file` 指定路径。每条表记录包含：
+### 9.1 数据库元数据（JDBC 运行时加载）
 
-
-
-| 字段        | 说明                                                        |
-| --------- | --------------------------------------------------------- |
-| `table`   | 表名                                                        |
-| `fields`  | 该表的**全部字段列表**，每项含 `name`（字段名）与 `type`（字段类型，供 M4 隐式类型转换判定） |
-| `indexes` | 索引信息，每项含 `name`（索引名）与 `columns`（索引字段）                     |
-
-示例 `table-metadata.json`：
+元数据（表清单 / 全部字段与类型 / 索引与列序）由工具**连接配置的数据库读取一次**（FR-8），不落文件、不可由文件覆盖。读取内容与规则用途：
 
 
 
-```
-{
-  "version": "1.0",
-  "tables": [
-    {
-      "table": "t_order",
-      "fields": [
-        { "name": "id", "type": "BIGINT" },
-        { "name": "order_no", "type": "VARCHAR(64)" },
-        { "name": "user_id", "type": "BIGINT" },
-        { "name": "status", "type": "INT" }
-      ],
-      "indexes": [
-        { "name": "PRIMARY", "columns": ["id"] },
-        { "name": "idx_order_no", "columns": ["order_no"] },
-        { "name": "idx_user_id", "columns": ["user_id"] }
-      ]
-    }
-  ]
-}
-```
+| 元数据项 | 读取来源（JDBC） | 规则用途 |
+| ----- | ---------- | ---- |
+| 表清单 | `DatabaseMetaData.getTables` | 表是否在元数据中（不在 → 默认无索引，M1 保守命中） |
+| 字段与类型 | `DatabaseMetaData.getColumns` | M4 隐式类型转换判定（类型缺失 → 不判定） |
+| 索引与列序 | `DatabaseMetaData.getIndexInfo` | M1/M6 前缀列命中判定 |
 
-> 规则：表未出现在元数据文件中时，默认该表无任何索引（见 §8 M1、§15）。后续可通过 
->
-> `MetadataProvider`
->
->  接口从外部数据源获取（见 §16）。
+> 规则：加载失败（连接失败 / 权限不足 / 查询失败 / 超时）→ 报错 exit 2，不进入分析；表未出现在加载结果中时默认该表无任何索引（见 §8 M1、§15）。扩展点：`MetadataProvider` SPI 保留，未来可替换其它元数据源（见 §16）。
 
 
 
@@ -408,7 +426,7 @@ bulk_operation_threshold: 1000
 
 
 
-* Git 仓库路径、head commit、prod commit（可选）、配置文件、表元数据 JSON（可选）、输出目录（见 FR-7）。
+* Git 仓库路径、head commit、prod commit（可选）、配置文件、**数据库连接（元数据来源，见 FR-8）**、输出目录（见 FR-7）。
 
 ### 10.2 输出
 
@@ -454,12 +472,12 @@ bulk_operation_threshold: 1000
 
 | 类别   | 要求                                                            |
 | ---- | ------------------------------------------------------------- |
-| 性能   | 单次分析（1k 文件以内 diff）应在 30s 内完成；解析失败不阻塞整体                        |
-| 兼容性  | 运行于 Java 8；无网络、不连库，离线可运行                                      |
-| 可维护性 | 规则引擎与解析 / 提取解耦；新增规则不改核心流程                                     |
-| 可测试性 | 每个规则、每种承载形式、保守策略均有可单测覆盖的样例                                    |
-| 错误处理 | 非法 commit / 非 git 仓库 / 配置错误 / 解析失败均给出明确退出码与提示（见 FR-7、FR-2 边界） |
-| 依赖   | 最小化第三方依赖；SQL 解析器选型见 §12                                       |
+| 性能   | 单次分析（1k 文件以内 diff）应在 30s 内完成；解析失败不阻塞整体；**元数据仅加载一次**，不重复连接数据库 |
+| 兼容性  | 运行于 Java 8；不访问互联网（离线可构建、可运行）；运行期仅连接所配置的数据库读取元数据（FR-8）          |
+| 可维护性 | 规则引擎与解析 / 提取解耦；新增规则不改核心流程；新增方言仅实现 `SqlDialect` SPI 并注册（FR-9）   |
+| 可测试性 | 每个规则、每种承载形式、保守策略均有可单测覆盖的样例；元数据加载具备可离线复现的测试策略（§12）             |
+| 错误处理 | 非法 commit / 非 git 仓库 / 配置错误 / 解析失败 / 数据库连接失败均给出明确退出码与提示（见 FR-7、FR-2、FR-8） |
+| 依赖   | 最小化第三方依赖；SQL 解析器选型见 §12；JDBC 驱动以 Maven 依赖直接引用（随 shaded jar 分发）    |
 
 
 
@@ -474,17 +492,20 @@ bulk_operation_threshold: 1000
 | 语言 / 运行时     | **Java 8**                                  | 契合 "main 方法触发"                   |
 | 构建           | Maven                                       | 主流通用                             |
 | Git 差异       | **JGit**                                    | 需要 `git diff` 能力                 |
-| SQL 解析       | **Alibaba Druid SQL 解析器**（`SQLParserUtils`） | 需支持 MySQL 语法 + 动态 SQL 预处理        |
+| SQL 解析       | **Alibaba Druid SQL 解析器**（`SQLParserUtils`） | 按方言（DbType）解析 + 动态 SQL 预处理；多方言原生支持 |
 | XML 解析       | `dom4j` 或 JDK 自带 `DocumentBuilder`          | 解析 mapper.xml                    |
 | 配置           | `yaml`（SnakeYAML）                           | 便于规则扩展                           |
+| 元数据加载        | **JDBC**（`java.sql`，JDK 内置）                | 运行时连接数据库读取元数据一次（FR-8）            |
+| JDBC 驱动      | **Maven 依赖直接引用**（MySQL Connector/J，compile） | 随 shaded jar 分发；Oracle/PostgreSQL 驱动在对应方言实现时加入 pom |
 | MyBatis-Plus | **3.5.x**                                   | Lambda 链式方法与 `SFunction` 机制的版本基准 |
 | Java 源码解析 | **JavaParser**（备选：Eclipse JDT）             | 解析 Lambda 构造与 `@TableName`/`@TableField` 注解，供 Lambda extractor 使用 |
+| 测试数据库        | **H2 内存库**（test scope）                       | 元数据加载与黄金用例的离线测试载体（§12）           |
 
-> 已确认：目标数据库固定为
+> 已确认：目标数据库 v1 为
 > **MySQL**
-> ；SQL 解析器采用
+> （Oracle / PostgreSQL 预留，见 FR-9）；SQL 解析器采用
 > **Druid SQL**
-> ；Git 差异采用
+> （按方言参数化）；Git 差异采用
 > **JGit**
 > 。
 
@@ -501,10 +522,11 @@ sql-risk-checker
 ├── cli               # main 入口、参数解析、退出码
 ├── diff              # 差异获取（git diff），ProductionCommitProvider 接口
 ├── extractor         # SQL 变更提取（mapper.xml / 注解 / Lambda 构造），SqlChange 模型
-├── parser            # 动态 SQL 规范化 + AST 解析
+├── parser            # 动态 SQL 规范化 + 按方言 AST 解析（SqlDialect SPI）
 ├── rule              # 规则引擎：内置规则加载、配置级别调整/开关、规则执行
 ├── report            # 控制台摘要 + JSON 报告生成
-└── config            # 配置加载与校验
+├── metadata          # 元数据加载（JDBC 一次读取），MetadataProvider SPI
+└── config            # 配置加载与校验（含数据库连接配置）
 ```
 
 
@@ -530,6 +552,8 @@ sql-risk-checker
 | AC-9  | 边界容错            | 非 git 仓库 / 非法 commit / 配置错误 / 解析失败均按约定退出码返回，不抛未捕获异常                          |
 | AC-10 | 测试              | 核心规则、提取、解析均有单测覆盖，构建通过                                                        |
 | AC-11 | `${}` 短路        | SQL 含 `${}` 时直接归属中危（M8），且不再输出其他规则命中                                          |
+| AC-12 | 数据库元数据（FR-8）   | 启动时从数据库加载元数据（过程日志可见且仅一次）；连接失败 / 权限不足 / 超时 → 明确报错 exit 2；`metadata_file` 键出现时告警忽略 |
+| AC-13 | 多方言预留（FR-9）    | `dialect: mysql` 正常分析；`dialect: oracle`（未实现）→ 明确报错 exit 2；新增方言仅需实现 `SqlDialect` SPI 并注册（以测试替身验证扩展机制） |
 
 
 
@@ -543,7 +567,11 @@ sql-risk-checker
 
 * 静态分析无法覆盖运行时动态 SQL 的真实参数注入场景，采用保守策略规避漏报。
 
-* 索引命中类规则（M1/M2/M4）依赖表元数据 JSON 的准确性（表名、全部字段列表与类型、索引信息）；**表未出现在元数据中时默认该表无任何索引**，M1 按未命中索引判定（宁可误报，避免漏报）；M4 在字段类型缺失时退化为不判定。
+* 索引命中类规则（M1/M2/M4）依赖数据库元数据的准确性（表名、全部字段列表与类型、索引信息）；**表未出现在加载结果中时默认该表无任何索引**，M1 按未命中索引判定（宁可误报，避免漏报）；M4 在字段类型缺失时退化为不判定。
+
+* 元数据加载依赖运行期能连通所配置的数据库与具备读取系统表（information_schema / DatabaseMetaData）的权限；连接或权限问题将直接终止（exit 2）。
+
+* 多方言为**预留能力**：v1 仅支持 MySQL 解析基线，Oracle / PostgreSQL 的方言实现（含分页子句识别）尚未提供，配置未实现方言值将明确报错。
 
 * 对无法解析的动态 SQL 片段标记为 "待人工复核"，可能存在少量误报 / 漏报。
 
@@ -563,7 +591,7 @@ sql-risk-checker
 | SQL 解析器                     | **Alibaba Druid SQL**（`SQLParserUtils`）                         |
 | Git 差异实现                    | **JGit** 内嵌                                                     |
 | 生产 commit 获取                | 本版由外部输入；接口契约已由 FR-1 `ProductionCommitProvider` 预留，后续迭代实现线上获取    |
-| 索引 / 表结构信息来源                | 独立的表元数据 JSON 文件（含表名、全部字段列表与类型、索引信息），不在 yaml 中配置；预留接口，后续从外部数据源获取 |
+| 索引 / 表结构信息来源                | ~~独立的表元数据 JSON 文件~~ **已被下方 2026-10-15 决策取代**（改为数据库运行时加载，见 FR-8）  |
 | 报告消费方                       | 目前仅输出结构化数据（JSON）+ 控制台摘要，暂不接 CI 门禁                               |
 | 白名单匹配                       | 仅支持完整匹配 与 `namespace.*` 前缀匹配，不支持其他模式                            |
 | Java 版本                     | **Java 8**                                                      |
@@ -574,11 +602,21 @@ sql-risk-checker
 | 元数据缺失时索引判定                  | 默认该表**无任何索引**，M1 按未命中索引判定                                       |
 | Lambda 链式方法支持范围             | 支持 MyBatis-Plus **全部链式方法及复杂嵌套**（and/or/apply/exists 等）          |
 | 大批量 insert                  | 暂不考虑，M7 仅针对 UPDATE/DELETE                                       |
-| 表元数据形式                      | 独立的 JSON 文件（`table-metadata.json`，含表名、全部字段与类型、索引信息），不在 yaml 中配置 |
+| 表元数据形式                      | ~~独立的 JSON 文件（`table-metadata.json`）~~ **已被下方 2026-10-15 决策取代**（数据库运行时加载，见 FR-8） |
 | Lambda 实体→表 / 列映射           | 解析 `@TableName`/`@TableField` 注解；未标注时按默认「驼峰 → 下划线」转换            |
 | MyBatis-Plus 版本             | 锁定 **3.5.x**                                                    |
 | `${}` 处理                    | SQL 含 `${}` 直接归属**中危**（M8），命中后不再继续判断其他规则                        |
 | choose 多骨架判定                | 各生成一份骨架各判断一次；**任一骨架命中任一风险规则即判定该语句命中，不再继续判断其余骨架**                |
+
+2026-10-15 扩展决策（本次需求方确认）：
+
+| 决策项         | 结论                                                                  |
+| ----------- | ------------------------------------------------------------------- |
+| 元数据来源（FR-8） | **改为数据库运行时加载**（JDBC，加载一次、只读、加载后关闭）；文件元数据通道（`--metadata`/`metadata_file`）**彻底移除** |
+| 连接配置通道      | yaml `datasource` 段 + CLI 覆盖；密码优先级 CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml |
+| JDBC 驱动      | **直接在 pom 中引用**（MySQL Connector/J 随 shaded jar 分发）；后续方言驱动在实现时加入 pom    |
+| 多方言（FR-9）   | v1 实现 MySQL；预留 `SqlDialect` SPI，未实现方言值配置时报错 exit 2                     |
+| 测试元数据载体     | 使用 **H2 内存库**（test scope）承载元数据加载与黄金用例的离线测试                           |
 
 > 遗留假设：配置文件格式默认采用
 > `yaml`

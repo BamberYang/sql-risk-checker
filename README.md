@@ -2,7 +2,7 @@
 
 基于 **Git 差异（diff）** 的 MyBatis SQL 静态风险检查 CLI：仅提取本次变更涉及的 SQL（mapper.xml / 注解 / MyBatis-Plus Lambda 构造），按**高危 / 中危 / 低危**三级规则分析，输出控制台摘要 + JSON 报告。
 
-> 当前状态：**M0~M9 全部里程碑完成并经需求方确认**——267 用例全绿（含 12 个黄金样例 + 确定性/FULL 工作区隔离/ac09 错误码），真实项目（union-order-app）全量验证通过，1050 文件性能抽查 3.3s（NFR ≤30s）。
+> 当前状态：**M0~M9 全部里程碑 + 扩展 M10（数据库元数据，JDBC）/ M11（方言 SPI）完成并经需求方确认**——312 用例全绿（含 14 个黄金样例、H2 元数据夹具、方言扩展端到端）；表元数据自 v1.8 起由**数据库运行时加载**（一次快照），SQL 解析支持**方言扩展**（v1 MySQL，Oracle/PostgreSQL 预留）。
 
 ## 文档
 
@@ -44,21 +44,34 @@ mvn -o clean package                       # 产出 target/sql-risk-checker-shad
 ## 使用
 
 ```bash
+# 配置文件（yaml）：数据库连接 + 规则/白名单（推荐把密码放环境变量）
+cat > sql-risk.yaml <<'EOF'
+datasource:
+  url: "jdbc:mysql://127.0.0.1:3306/your_db"
+  username: "readonly"
+  password: ""                 # 建议留空，用环境变量 SQL_RISK_DB_PASSWORD 提供
+dialect: mysql
+EOF
+
 # DIFF 模式：扫描 prod → head 之间的变更 SQL
+export SQL_RISK_DB_PASSWORD='******'
 java -jar target/sql-risk-checker-shaded.jar \
-    --repo /path/to/repo --prod-commit <sha> --metadata /path/to/sql-risk-metadata.json
+    --repo /path/to/repo --prod-commit <sha> --config sql-risk.yaml
 
 # FULL 模式：全量扫描 head 提交树（省略 --prod-commit）
-java -jar target/sql-risk-checker-shaded.jar --repo /path/to/repo --metadata <path>
+java -jar target/sql-risk-checker-shaded.jar --repo /path/to/repo --config sql-risk.yaml
 ```
 
 | 参数 | 说明 |
 | ---- | ---- |
 | `--repo <path>` | 仓库路径（必需；只读，数据源恒为提交树，不含工作区未提交内容） |
 | `--prod-commit <sha>` | 生产 commit；提供则 DIFF 模式，省略则 FULL 模式 |
-| `--metadata <path>` | 表元数据 JSON；省略时取仓库根 `sql-risk-metadata.json`（缺失/格式错误 → exit 2） |
+| `--dialect <name>` | SQL 方言，缺省 `mysql`（oracle/postgresql 为预留值，未实现报错） |
+| `--db-url <url>` | 数据库 JDBC URL（元数据来源；未传读 yaml `datasource.url`） |
+| `--db-username <u>` | 数据库账号（未传读 yaml） |
+| `--db-password <pwd>` | 数据库密码（优先级：CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml） |
 
-元数据格式与完整示例见 [examples/sql-risk-metadata.example.json](examples/sql-risk-metadata.example.json)（由真实 PolarDB/PostgreSQL DDL 生成，覆盖 9 张表：列类型、主键与普通/唯一/复合索引）。
+表元数据**从数据库运行时加载**（JDBC 一次读取，只读、加载后即关闭）；连接配置见 yaml `datasource` 段（`url`/`username`/`password`/`connection_timeout_seconds`）。
 | `--config <path>` | 配置文件（覆盖内置默认；`rules`/`whitelist.statements`/`low_risk_keywords`） |
 | `--output <dir>` | 报告目录，默认 `.`；报告文件名固定 `sql_risk_report.json` |
 | `--verbose` | stderr 输出提取/白名单/解析/规则阶段进度日志 |

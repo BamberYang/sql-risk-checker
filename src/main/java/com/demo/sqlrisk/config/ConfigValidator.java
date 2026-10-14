@@ -1,6 +1,7 @@
 package com.demo.sqlrisk.config;
 
 import com.demo.sqlrisk.model.RiskLevel;
+import com.demo.sqlrisk.parser.SqlDialects;
 import com.demo.sqlrisk.util.TextUtils;
 
 import java.util.List;
@@ -51,6 +52,16 @@ public final class ConfigValidator {
             if (TextUtils.isBlank(keyword)) {
                 throw new ConfigException("low_risk_keywords 存在空关键字");
             }
+        }
+    }
+
+    /** 方言取值校验（v1.8/D25；M11 起由 {@code SqlDialects.supportedNames()} 动态提供——SPI 注册即可放开）。 */
+    public static void validateDialect(String dialect) {
+        String normalized = dialect == null ? "" : dialect.trim().toLowerCase(Locale.ROOT);
+        if (!SqlDialects.supportedNames().contains(normalized)) {
+            throw new ConfigException("dialect 暂不支持: " + dialect
+                    + "（当前支持: " + String.join(", ", SqlDialects.supportedNames())
+                    + "；oracle/postgresql 为预留值）");
         }
     }
 }

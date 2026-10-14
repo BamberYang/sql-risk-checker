@@ -1,6 +1,7 @@
 package com.demo.sqlrisk.testutil;
 
 import com.demo.sqlrisk.config.AppConfig;
+import com.demo.sqlrisk.config.DataSourceSetting;
 import com.demo.sqlrisk.config.RuleSetting;
 import com.demo.sqlrisk.extractor.AnnotationSqlText;
 import com.demo.sqlrisk.metadata.FieldMeta;
@@ -107,7 +108,8 @@ public final class RuleTestSupport {
     }
 
     public static AppConfig config(List<String> keywords, Map<String, RuleSetting> rules) {
-        return new AppConfig(rules, "/meta.json", keywords, Collections.<String>emptyList());
+        return new AppConfig(rules, new DataSourceSetting("jdbc:h2:mem:rule-support;DB_CLOSE_DELAY=-1",
+                "sa", "", 10), "mysql", keywords, Collections.<String>emptyList());
     }
 
     private static RuleContext build(ParsedSql parsedSql, String rawText,

@@ -9,13 +9,14 @@ import com.demo.sqlrisk.extractor.CandidateFile;
 import com.demo.sqlrisk.extractor.ExtractResult;
 import com.demo.sqlrisk.extractor.ExtractionOutput;
 import com.demo.sqlrisk.extractor.ExtractionService;
-import com.demo.sqlrisk.metadata.JsonMetadataProvider;
+import com.demo.sqlrisk.metadata.JdbcMetadataProvider;
 import com.demo.sqlrisk.metadata.MetadataProvider;
 import com.demo.sqlrisk.parser.DynamicEvalContext;
 import com.demo.sqlrisk.parser.ParseContext;
 import com.demo.sqlrisk.parser.ParseOutcome;
 import com.demo.sqlrisk.parser.ParsedStatement;
 import com.demo.sqlrisk.parser.QueryFacts;
+import com.demo.sqlrisk.parser.SqlDialects;
 import com.demo.sqlrisk.parser.StatementParser;
 import com.demo.sqlrisk.model.ExtractedStatement;
 import com.demo.sqlrisk.model.Finding;
@@ -31,7 +32,6 @@ import com.demo.sqlrisk.rule.RuleRegistry;
 import com.demo.sqlrisk.util.TextUtils;
 import org.eclipse.jgit.revwalk.RevCommit;
 
-import java.nio.file.Paths;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -64,9 +64,13 @@ public final class AnalysisEngine {
     public ReportModel execute(RunContext ctx) {
         ExecutorService executor = createExecutor();
         try {
-            // P1 配置（已在 cli 层完成）与表元数据加载（必需输入，缺失/格式错误 → exit 2）
-            // metadata 自 M6/M7 起透传至解析与规则阶段
-            MetadataProvider metadata = JsonMetadataProvider.load(Paths.get(ctx.config().metadataFile()));
+            // P1 配置（已在 cli 层完成）与表元数据加载（v1.8/FR-8：JDBC 一次加载快照，加载后连接即关；
+            // 连接失败/权限不足/超时 → MetadataException → exit 2）；metadata 透传至解析与规则阶段
+            MetadataProvider metadata = JdbcMetadataProvider.load(ctx.config().datasource());
+            if (ctx.verbose() && metadata instanceof JdbcMetadataProvider) {
+                System.err.println("[元数据] " + ctx.config().datasource().url() + " 加载 "
+                        + ((JdbcMetadataProvider) metadata).tableCount() + " 张表（一次加载，连接已关闭）");
+            }
 
             // P2/P3 模式判定、差异获取与语句提取（数据源恒为提交树：DIFF 两端均提交树 / FULL 遍历 head 提交树，D21/D22）
             List<ExtractedStatement> extracted = Collections.emptyList();
@@ -125,7 +129,8 @@ public final class AnalysisEngine {
 
                 ParseContext parseContext = new ParseContext(
                         new DynamicEvalContext(extraction.xmlIndex(), extraction.xmlContents()),
-                        extraction.entityIndex(), metadata);
+                        extraction.entityIndex(), metadata,
+                        SqlDialects.of(ctx.config().dialect())); // v1.8：方言经配置校验后此处取实现
                 for (ExtractedStatement statement : accepted) {
                     ParseOutcome outcome = StatementParser.parse(statement, parseContext);
                     if (outcome.parsed() != null) {

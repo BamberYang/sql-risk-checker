@@ -1,7 +1,7 @@
 package com.demo.sqlrisk.rule;
 
-import com.demo.sqlrisk.config.AppConfig;
 import com.demo.sqlrisk.config.RuleSetting;
+import com.demo.sqlrisk.testutil.RuleTestSupport;
 import com.demo.sqlrisk.model.RiskLevel;
 import org.junit.jupiter.api.Test;
 
@@ -48,8 +48,8 @@ class RuleRegistryTest {
         Map<String, RuleSetting> settings = new LinkedHashMap<String, RuleSetting>();
         settings.put("H1", new RuleSetting("H1", RiskLevel.MEDIUM, true));
         settings.put("M1", new RuleSetting("M1", RiskLevel.MEDIUM, false));
-        RuleRegistry registry = RuleRegistry.create(new AppConfig(settings,
-                "/tmp/meta.json", Collections.<String>emptyList(), Collections.<String>emptyList()));
+        RuleRegistry registry = RuleRegistry.create(RuleTestSupport.config(
+                Collections.<String>emptyList(), settings));
 
         assertFalse(registry.isEnabled("M1"), "配置禁用生效");
         List<String> enabled = new ArrayList<String>();

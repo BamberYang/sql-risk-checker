@@ -7,9 +7,9 @@
 | 项    | 内容                                             |
 | ---- | ---------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具详细设计                            |
-| 版本   | v1.1                                           |
-| 日期   | 2026-10-14                                     |
-| 关联文档 | 需求文档 v1.0；概要设计 v1.7（下称"概要设计"，决策 D1~D23 均已确认）    |
+| 版本   | v1.8                                           |
+| 日期   | 2026-10-15                                     |
+| 关联文档 | 需求文档 v1.1（FR-8/FR-9 扩展）；概要设计 v1.8（决策 D1~D27）     |
 | 本文定位 | 编码直接依据：类结构、方法签名、算法伪码、常量阈值、测试类清单；不包含最终源码本身      |
 | 阅读顺序 | §2 设计约定 → §3 类总览 → §4~§14 分包详设 → §15 异常 → §18 测试 → §19 决策 → §20 追溯 |
 
@@ -38,8 +38,8 @@
 com.demo.sqlrisk
 ├── cli        SqlRiskCheckerMain · CliArgs · ExitCode
 ├── core       AnalysisEngine · RunContext · WhitelistFilter · SummaryCalculator
-├── config     AppConfig · RuleSetting · ConfigLoader · ConfigValidator · ConfigException
-├── metadata   MetadataProvider · JsonMetadataProvider · TableMetadata · FieldMeta · IndexMeta · MetadataException
+├── config     AppConfig · RuleSetting · DataSourceSetting · ConfigLoader · ConfigValidator · ConfigException
+├── metadata   MetadataProvider · JdbcMetadataProvider · TableMetadata · FieldMeta · IndexMeta · MetadataException
 ├── diff       GitRepo · RepoContentReader · DiffService · CommitTreeWalker · ChangeSet · FileChange · Hunk
 │              ProductionCommitProvider · CliArgProductionCommitProvider · DiffException
 ├── extractor  SqlSourceExtractor · CandidateFile · ExtractContext · ExtractResult
@@ -48,7 +48,7 @@ com.demo.sqlrisk
 │              LambdaSqlExtractor · LambdaChainModel · LambdaCall · EntityIndex · EntityMeta · ColumnMapping
 ├── parser     PlaceholderNormalizer · NormalizedSql · DynamicEvaluator · LambdaSkeletonRenderer
 │              SqlSkeleton · DroppedBranch · DruidSqlParser · QueryFacts · QueryFactsBuilder
-│              ParsedStatement · ParsedSql · SqlParseException
+│              SqlDialect · SqlDialects · MysqlDialect · ParsedStatement · ParsedSql · SqlParseException
 ├── rule       Rule · RuleContext · RuleEngine · RuleRegistry · RuleProvider · builtin/(H1~H3、M1~M6、M8、L1/L2/L4 共 13 个)
 ├── report     ReportModel · Summary · ConsoleReporter · JsonReporter · ReportWriter · ReportException
 ├── model      Mode · ChangeType · StatementSource · RiskLevel · DiffType
@@ -120,15 +120,19 @@ public final class CliArgs {                    // 手写解析，不引入 CLI 
     @Nullable String prodCommit;
     @Nullable String configPath;
     String outputDir = ".";                     // 缺省当前目录
-    @Nullable String metadataPath;
+    @Nullable String dialect;                   // v1.8：缺省 mysql
+    @Nullable String dbUrl;                     // v1.8：覆盖 yaml datasource.url
+    @Nullable String dbUsername;                // v1.8
+    @Nullable String dbPassword;                // v1.8：优先级 CLI > 环境变量 > yaml
     boolean verbose;
     // parse(String[]) 抛 CliUsageException（exit 2）；--help 打印后 exit 0
+    // 已移除参数：--metadata（v1.8/D24，出现 → 参数错误 exit 2）
 }
 ```
 
 `SqlRiskCheckerMain.main` 伪码：
 
-> 调试便利（实现补充）：`argv` 为空 → 使用入口内置 `DEBUG_DEFAULT_ARGV`（本地验证仓库 + 占位元数据 + `/tmp` 输出 + `--verbose`），并向 stderr 打印 `[调试]` 提示，便于 IDE 直接运行 `main`；非空参数原样解析，正式运行不受影响。
+> 调试便利（实现补充）：`argv` 为空 → 使用入口内置 `DEBUG_DEFAULT_ARGV`（本地验证仓库 + 本地开发库连接参数 + `/tmp` 输出 + `--verbose`），并向 stderr 打印 `[调试]` 提示，便于 IDE 直接运行 `main`；非空参数原样解析，正式运行不受影响。该常量随 v1.8 连接参数（`--db-url`/`--db-username`/`--dialect` 等）调整，不再包含元数据文件路径。
 
 ```
 int main(argv):
@@ -148,9 +152,10 @@ int main(argv):
 
 | 校验                                  | 结果     |
 | ----------------------------------- | ------ |
-| `--repo` 缺失 / 重复参数 / 未知参数 / `--format` 非 `json` | exit 2 |
+| `--repo` 缺失 / 重复参数 / 未知参数 / `--format` 非 `json` / **`--metadata`（已移除参数）** | exit 2 |
 | `--head-commit` 与 `--prod-commit` 均缺省 | 合法（FULL 模式，取 HEAD 提交树） |
 | `--head-commit` == `--prod-commit`    | 合法：空差异，0 条语句，exit 0（console 提示"无差异语句"） |
+| `--dialect` 取值不在已支持列表（v1 仅 `mysql`） | exit 2（不静默降级，D25） |
 
 ***
 
@@ -159,23 +164,33 @@ int main(argv):
 ```java
 public final class AppConfig {                  // 三层合并结果，不可变
     Map<String, RuleSetting> ruleSettings;      // ruleId → 覆盖项
-    String metadataFile;                        // 已解析为绝对路径
+    DataSourceSetting datasource;               // v1.8：数据库连接（元数据来源）
+    String dialect;                             // v1.8：方言名（已校验为已支持值）
     List<String> lowRiskKeywords;
     List<String> whitelistStatements;           // 原始模式串（已校验）
 }
 public final class RuleSetting { String ruleId; RiskLevel level; boolean enabled; }
+
+public final class DataSourceSetting {
+    String url;                                 // 必填（CLI --db-url 可提供）
+    @Nullable String username;
+    @Nullable String password;                  // 已按 CLI > 环境变量 > yaml 解析后的最终值
+    int connectionTimeoutSeconds = 10;          // §17
+}
 ```
 
-`ConfigLoader.load(String configPath, String metadataArg, String repoPath)` 流程（M9 回写：实际签名携带原始 CLI 值而非 `CliArgs`，避免 config 包反向依赖 cli，§3.3）：
+`ConfigLoader.load(CliOverrides overrides, String repoPath)` 流程（v1.8 起以不可变 `CliOverrides{configPath, dialect, dbUrl, dbUsername, dbPassword}` 携带 CLI 值，避免 config 包反向依赖 cli，§3.3；另有 `load(overrides, repoPath, Map<String,String> env)` 重载供测试注入环境变量——M10 实现回写）：
 
-1. 读内置 `resources/default-config.yaml` → 用户 `--config` 文件覆盖 → CLI 参数最终覆盖（当前仅 `--metadata` 参与覆盖 `metadata_file`）。
-2. yaml 解析（SnakeYAML `safeLoad`，禁用任意对象构造）；未知顶层键 → stderr 警告忽略；`bulk_operation_threshold`、`conservative_if_always_false` 等已移除键 → 告警并忽略。
-3. `metadata_file` 相对路径以**配置文件所在目录**为基准解析（内置默认配置为基准时→仓库根，由 CLI 层用 repoPath 拼接）。
+1. 读内置 `resources/default-config.yaml` → 用户 `--config` 文件覆盖 → CLI 覆盖（dialect / db-url / db-username / db-password）。
+2. yaml 解析（SnakeYAML `safeLoad`，禁用任意对象构造）；未知顶层键 → stderr 警告忽略；已移除键 `bulk_operation_threshold`、`conservative_if_always_false`、**`metadata_file`（v1.8/D24）** → 告警并忽略。
+3. 密码解析优先级（D26）：`--db-password` > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml `datasource.password`；日志一律脱敏。
 4. `ConfigValidator` 校验（错误 → `ConfigException`，含字段级消息）：
    - `rules[].ruleId` 必须存在于内置规则表，未知 → 警告忽略；
    - `rules[].level ∈ {HIGH,MEDIUM,LOW}`；`enabled` 布尔；
    - 白名单模式必须满足 `完整匹配` 或 `namespace.*`（正则：`^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*(\.\*)?$`，且 `*` 仅可出现在末尾段），非法 → 报错；
-   - `low_risk_keywords` 元素非空。
+   - `low_risk_keywords` 元素非空；
+   - **`dialect` 必须 ∈ `SqlDialects.supportedNames()`（v1 仅 `mysql`），否则报错（D25）**；
+   - **`datasource.url` 缺失（且 CLI 未提供）→ 报错；须以 `jdbc:` 开头**。
 
 ***
 
@@ -192,12 +207,40 @@ public final class FieldMeta { String name; String type; }     // type 如 "BIGI
 public final class IndexMeta { String name; List<String> columns; }
 ```
 
-`JsonMetadataProvider.load(Path)`：
+**v1.8（FR-8/D24）：唯一实现 `JdbcMetadataProvider`——JDBC 一次加载数据库元数据为内存快照。**
 
-1. 文件不存在 / JSON 语法错误 / 结构校验失败（`table` 空、`fields[].name/type` 空、`indexes[].columns` 空数组）→ `MetadataException`（exit 2）。
-2. 重复表名取首条并警告。
-3. 表名、列名匹配统一 `toLowerCase(Locale.ROOT)`。
-4. `find` 未命中 → `Optional.empty()`（语义 = 该表无任何索引，M1/M6 按未命中判定）。
+```java
+public final class JdbcMetadataProvider implements MetadataProvider {
+    /** 连接一次 → 读取 → 关闭连接；失败 → MetadataException（exit 2） */
+    public static JdbcMetadataProvider load(DataSourceSetting cfg) { ... }
+    /** v1.8 起仅测试可见：直接以内存快照构造（H2 加载后复用/替身测试） */
+    static JdbcMetadataProvider ofSnapshot(Collection<TableMetadata> tables) { ... }
+}
+```
+
+`JdbcMetadataProvider.load` 伪码：
+
+```
+① 驱动加载：无需额外机制——驱动为 pom 依赖（MySQL Connector/J，compile scope，随 shaded jar 分发），
+   经 classpath 直接可见（D27，2026-10-15 修订）
+   └─ 驱动类加载失败（兜底，正常不应发生）→ MetadataException
+② 连接：DriverManager.getConnection(url, username, password)；LoginTimeout = connectionTimeoutSeconds
+   └─ 连接失败/超时/权限不足 → MetadataException（消息含脱敏连接串与原因，不含密码）
+③ 元数据读取（DatabaseMetaData，只读）：
+   · getTables(catalog=schema 由 url 决定, null, {"TABLE"}, null)   → 表清单（系统表按驱动返回过滤）
+   · 每表 getColumns(...)                                            → name + TYPE_NAME + 尺寸/精度
+       - type 归一化：TYPE_NAME 基础 + 尺寸（如 varchar(64)、numeric(19,2)、timestamp(6)）；无尺寸类型保留原名
+       - 跨库别名归一（M10 实测回写）：CHARACTER VARYING/CHAR VARYING → VARCHAR、CHARACTER → CHAR、INTEGER → INT
+   · 每表 getIndexInfo(table, unique=false, approximate=false)       → INDEX_NAME + ORDINAL_POSITION 排序
+       - 同名索引多行聚合为 [列序]；PRIMARY/主键索引保留驱动返回名（MySQL=PRIMARY）
+④ 组装为不可变快照（表名/列名小写索引，语义与旧 File 实现一致）；重复表名取首条并警告
+⑤ finally：Connection.close()（ClassLoader 保留至进程结束）；此后 provider 只读内存，不再触库
+```
+
+- 一次加载语义：`load` 在 P1 调用**一次**；同一进程不做第二次连接/加载（NFR）。
+- 失败语义（承接 D12 v1.8 修订）：连接失败 / 权限不足 / `getTables|getColumns|getIndexInfo` 抛错 / 超时 → `MetadataException`（exit 2），无降级路径。
+- `find` 未命中 → `Optional.empty()`（语义 = 该表无任何索引，M1/M6 按未命中判定）。
+- 已移除（v1.8/D24）：`JsonMetadataProvider`、`--metadata`、yaml `metadata_file`（后者出现时告警忽略）；`examples/sql-risk-metadata.example.json` 不再随库交付。
 
 ***
 
@@ -554,7 +597,7 @@ public final class LambdaSkeletonRenderer {
 
 ```java
 public final class DruidSqlParser {
-    public SQLStatement parse(String normalizedSql);      // SQLParserUtils.createSQLStatementParser(sql, DbType.mysql)
+    public SQLStatement parse(String normalizedSql, SqlDialect dialect);   // v1.8：SQLParserUtils.createSQLStatementParser(sql, dialect.dbType())
 }                                                         // 异常统一包装为 SqlParseException（携带原文与原因）
 ```
 
@@ -574,7 +617,7 @@ public final class QueryFactsBuilder {
 | --------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `kind`                                        | `instanceof` SQLSelectStatement / SQLUpdateStatement / SQLDeleteStatement / SQLInsertStatement |
 | `hasWhere`                                    | SELECT:`queryBlock.getWhere()!=null`；UPDATE/DELETE:`getWhere()!=null`                            |
-| `hasLimit`                                    | SELECT:`queryBlock.getLimit()!=null`；UPDATE/DELETE:`MySqlUpdateStatement/MySqlDeleteStatement.getLimit()!=null` |
+| `hasLimit`                                    | SELECT:`queryBlock.getLimit()!=null` 或 `dialect.hasRowLimit(ast)`（v1.8：分页子句识别交由方言，MySQL=LIMIT）；UPDATE/DELETE 同理 |
 | `selectAll`                                   | selectList 含 `SQLAllColumnExpr`（含 `t.*` 的 SQLPropertyExpr）                                     |
 | `tables`                                      | FROM/JOIN 递归收集 `SQLExprTableSource`（剥 schema 前缀）                                              |
 | `predicateColumnsByTable`                     | WHERE 子树中比较/IN/BETWEEN/LIKE/IS NULL 的列侧；有 alias 按 alias 归表，单表语句归该表，多表歧义归 `UNRESOLVED`（从 M1 判定中排除） |
@@ -607,6 +650,33 @@ public final class ParsedSql {
 - 代换后骨架 `hasUnknownFragment=true`（报告 `uncertain=true`："条件来自运行期 Wrapper"）；
 - 代换后仍不可解析 → 走既有"含 `${}` 短路候选"路径保留（M8 因根名被覆盖而不命中 → 按 §11.2-④ 归 SKIP）；
 - 解析失败兜底（§8.5 结构性保证）语义不变：**未解析**的 `${}` 仍以空骨架候选交语句级短路（M8）定级；未命中的空骨架归 SKIP（§11.2-④，v1.6）。
+
+### 10.7 SqlDialect（方言 SPI，v1.8 / FR-9 / D25）
+
+```java
+public interface SqlDialect {
+    String name();                            // 配置值："mysql"（v1 唯一实现）
+    DbType dbType();                          // Druid 方言映射
+    boolean hasRowLimit(SQLStatement ast);    // 分页/限制子句识别（H3/L4 的 hasLimit 事实来源）
+}
+
+public final class SqlDialects {              // 注册表（静态注册，确定性顺序）
+    public static SqlDialect of(String name);         // 未知 → ConfigException（exit 2，不降级）
+    public static Set<String> supportedNames();       // v1.8：{"mysql"}
+}
+
+public final class MysqlDialect implements SqlDialect {
+    // dbType()=DbType.mysql；hasRowLimit()=SELECT 查 queryBlock.getLimit()；
+    // UPDATE/DELETE 查 MySqlUpdateStatement/MySqlDeleteStatement.getLimit()（现行为迁入）
+}
+```
+
+- **预留扩展实现要点**（文档即契约，实现方言时按此落地）：
+  - `PostgresqlDialect`：`DbType.postgresql`；`hasRowLimit` = `LIMIT` 或 `FETCH FIRST n ROWS ONLY`；
+  - `OracleDialect`：`DbType.oracle`；`hasRowLimit` = `FETCH FIRST n ROWS ONLY` 或 WHERE 子树含 `ROWNUM` 谓词（含嵌套子查询包裹形态）；
+  - 新增方言流程 = 实现 `SqlDialect` → `SqlDialects` 注册 → 用例（含分页识别正/反例）→ 放开配置值与 `supportedNames`；核心管线与 13 条规则**零改动**。
+- 方言贯穿点：`DruidSqlParser.parse(sql, dialect)`（§10.4）与 `QueryFactsBuilder` 的 `hasLimit`（§10.5）；**方言经 `ParseContext` 装配**（M11 实现回写：3 参构造缺省 MySQL 保持兼容，引擎以配置值注入）；报告/snippet 渲染仍统一走 `SQLUtils.toMySqlString`（展示层，与解析方言解耦）。
+- 未实现方言值（`oracle`/`postgresql`）→ **ConfigException exit 2**（明确报错，不静默降级为 MySQL 解析）。
 
 ***
 
@@ -801,7 +871,8 @@ if unindexedTables 非空: 命中
 ```java
 public final class RunContext {
     String repoPath; Mode mode; @Nullable String headCommitArg, prodCommitArg;
-    AppConfig config; String outputDir; boolean verbose; Clock clock;
+    AppConfig config;               // 含 datasource 连接配置与 dialect（v1.8）
+    String outputDir; boolean verbose; Clock clock;
 }
 ```
 
@@ -817,8 +888,9 @@ public final class AnalysisEngine {
 
 ```
 execute(ctx):
-  # P1 配置已在 main 完成；此处加载元数据
-  metadata = JsonMetadataProvider.load(ctx.config.metadataFile)          # 失败 → exit 2
+  # P1 配置已在 main 完成；此处加载元数据（v1.8：JDBC 一次加载，连接随加载关闭）
+  metadata = JdbcMetadataProvider.load(ctx.config.datasource)            # 驱动/连接/权限/超时失败 → exit 2
+  dialect  = SqlDialects.of(ctx.config.dialect)                          # 配置已校验；此处取实现
   gitRepo  = GitRepo.open(ctx.repoPath)                                  # 失败 → exit 2
   head     = gitRepo.resolveCommit(ctx.headCommitArg ?? "HEAD")          # 失败 → exit 2
   reader   = gitRepo.contentReader(head)
@@ -908,8 +980,8 @@ ignored = ignored.size()
 ```
 SqlRiskException (abstract, extends RuntimeException, int exitCode, String message)
 ├── CliUsageException          2   // 参数缺失/非法
-├── ConfigException            2   // 配置文件缺失（显式指定）/语法错误/校验失败
-├── MetadataException          2   // 元数据缺失（含默认路径）/格式错误/校验失败
+├── ConfigException            2   // 配置文件缺失（显式指定）/语法错误/校验失败（含方言未支持、datasource 配置非法）
+├── MetadataException          2   // 元数据加载失败：连接失败/权限不足/查询失败/超时（v1.8/D24；原文件缺失语义已移除）
 ├── DiffException              2   // 非 git 仓库/非法 commit/仓库不可读
 └── ReportException            2   // 报告目录/文件写入失败
 ```
@@ -948,6 +1020,7 @@ SqlRiskException (abstract, extends RuntimeException, int exitCode, String messa
 | `CONSOLE_SQL_LIMIT`      | 200 字符 | 控制台 SQL 展示截断                 |
 | `REPORT_FILE_NAME`       | `sql_risk_report.json` | JSON 报告文件名（机器契约）           |
 | `REPORT_FILE_NAME_HTML`  | `sql_risk_report.html` | HTML 报告文件名（阅读层，默认双产出）  |
+| `DB_CONNECTION_TIMEOUT_SECONDS` | 10 秒 | `datasource.connection_timeout_seconds` 缺省值（v1.8） |
 | 规则默认优先级                  | M8=-100；H1..H3=10..12；M1..M6=20..25；L1/L2/L4=30..32 | §11.4 |
 
 ***
@@ -961,10 +1034,10 @@ SqlRiskException (abstract, extends RuntimeException, int exitCode, String messa
 | cli  | `CliArgsTest`                                                                                                     |
 | core | `AnalysisEngineIT`（端到端黄金样例）、`WhitelistFilterTest`、`SummaryCalculatorTest`                                             |
 | config | `ConfigLoaderTest`、`ConfigValidatorTest`                                                                           |
-| metadata | `JsonMetadataProviderTest`                                                                                        |
+| metadata | `JdbcMetadataProviderTest`（H2 内存库：表/列类型/索引加载、一次加载与连接关闭、连接失败/超时错误语义）（v1.8）        |
 | diff | `GitRepoTest`、`DiffServiceTest`、`CommitTreeWalkerTest`、`LineRangesTest`                                             |
 | extractor | `MapperXmlExtractorTest`、`XmlFragmentIndexTest`、`FragmentPropagatorTest`、`AnnotationSqlExtractorTest`、`ProviderMethodResolverTest`、`LambdaSqlExtractorTest`、`EntityIndexTest` |
-| parser | `DynamicEvaluatorTest`、`LambdaSkeletonRendererTest`、`PlaceholderNormalizerTest`、`QueryFactsBuilderTest`、`DruidSqlParserTest` |
+| parser | `DynamicEvaluatorTest`、`LambdaSkeletonRendererTest`、`PlaceholderNormalizerTest`、`QueryFactsBuilderTest`、`DruidSqlParserTest`、`SqlDialectsTest`（注册/取值/未支持报错/分页识别，v1.8） |
 | rule | `H1RuleTest`…`L4RuleTest`（13 个）、`RuleEngineTest`（M8 短路/多骨架首命中即停/禁用规则）、`RuleRegistryTest`（13 内置/执行顺序/级别覆盖/禁用）                              |
 | report | `JsonReporterTest`（黄金 JSON）、`ConsoleReporterTest`                                                                |
 
@@ -972,7 +1045,8 @@ SqlRiskException (abstract, extends RuntimeException, int exitCode, String messa
 
 - `FixtureRepoBuilder`（test util）：JGit 程序化构造临时仓库——按 `files.txt` 清单写文件 → 提交为 prod → 再按 `changes.txt` 修改 → 提交为 head；产出 (repoPath, prodSha, headSha)。
   **确定性（M9）**：作者/提交者固定为 `fixture/fixture@test` 且提交时间固定为测试时钟（2026-10-14T08:00+08:00），提交 SHA 完全由内容决定 → `expected/report.json` 可直接比对真实 head/prod SHA；注意 JGit `PersonIdent(PersonIdent)` 拷贝构造器会重置时间为当前值，必须复用固定实例。
-- 黄金 IT 类为 `AnalysisEngineIT`（surefire 显式收录 `**/*IT.java`）；管线执行"元数据落盘为仓库根默认路径 → ConfigLoader → RunContext(固定 Clock) → AnalysisEngine → JsonReporter"，并对每个用例强断言 §13.4 口径恒等式。regen 模式（需要更新 expected 时）：临时以真实管线重写 `expected/report.json` 后人工复核，复核通过即删除该临时类（不随库交付）。
+- 黄金 IT 类为 `AnalysisEngineIT`（surefire 显式收录 `**/*IT.java`）；管线执行"**用例 `schema.sql` 执行到 H2 内存库 → JdbcMetadataProvider 加载** → ConfigLoader → RunContext(固定 Clock) → AnalysisEngine → JsonReporter"，并对每个用例强断言 §13.4 口径恒等式。regen 模式（需要更新 expected 时）：临时以真实管线重写 `expected/report.json` 后人工复核，复核通过即删除该临时类（不随库交付）。
+  **v1.8 变更**：元数据来源由"落盘 JSON → 加载"改为"H2 建库 → JDBC 加载"（D24）；H2 为 test scope 依赖（§3.5），首次引入需在线校验依赖后离线可用。
 - `GoldenCaseRunner`：以固定 `Clock.fixed` 执行完整管线（不经 main），JSON 归一化（去空白）后与 `expected/report.json` 全量比对；断言退出码由 `ExitCode` 推导函数给出。
 - 用例目录结构：
 
@@ -981,7 +1055,7 @@ src/test/resources/cases/<caseId>/
 ├── repo/            # 初始提交内容（相对路径 → 文件）
 ├── changes/         # 第二次提交的改动（覆盖/新增/删除标记）
 ├── config.yaml      # 可选，缺省用内置
-├── metadata.json    # 可选
+├── schema.sql       # 可选：H2 兼容 DDL，测试启动时执行到内存库（v1.8 替代 metadata.json）
 ├── args             # 手工场景的参数（供 IT 直跑调试）
 └── expected/report.json
 ```
@@ -999,12 +1073,14 @@ src/test/resources/cases/<caseId>/
 | `ac06-annotation-lambda`     | 注解（含 script/Provider 失败跳过）与 Lambda（全链方法、嵌套组、布尔重载丢弃）（AC-6）     |
 | `ac07-whitelist`             | 精确/前缀命中 → ignored；Lambda 不参与白名单（AC-7）                       |
 | `ac08-report-shape`          | 报告字段齐全、口径恒等式成立（AC-8）                                       |
-| `ac09-error-codes`           | 非 git 仓库/非法 commit/坏配置/元数据缺失/元数据格式错误（AC-9）                   |
+| `ac09-error-codes`           | 非 git 仓库/非法 commit/坏配置/**方言未支持**/**数据库连接失败**（AC-9，v1.8 调整元数据错误形态）      |
 | `ac11-dollar-shortcircuit`   | `${}` 出现在被丢弃分支内 → 仍短路定级 MEDIUM，无其他 findings（AC-11）           |
 | `skip-parse-failed`          | 解析失败/无法提取 → skipped[]（kind=PARSE_FAILED/UNSUPPORTED_CARRIER），不影响退出码 |
 | `m1-metadata-semantics`      | 表不在元数据 → 无索引；类型缺失 → M4 不判定                                  |
 | `ac12-annotation-wrapper`    | 注解 `${ew.customSqlSegment}` + `@Param("ew") Wrapper` 参数：仅 SQL 变更 → 不命中 M8（代换解析、uncertain）；仅参数行变更致绑定失配 → 恢复 M8（v1.4）；代换后仍不可解析（固定条件与 `${ew.sqlSegment}` 混排）→ 空骨架归 SKIP（v1.6） |
 | `ac13-lambda-branches`       | Lambda 控制流分支：if/else 两骨架（首命中即停）；switch default 路径骨架命中 H1（skeleton=1，含分支保守附注）；分支体内行变更照常提取（v1.5） |
+
+> v1.8：全部用例的元数据改为用例内 `schema.sql` 经 H2 建库后由 `JdbcMetadataProvider` 加载（`m1-metadata-semantics` 的语义断言不变）；`ac09` 新增"连接失败（非法 url）→ exit 2"与"方言未支持 → exit 2"两个错误形态。
 
 ### 18.4 单测边界清单（每规则）
 
@@ -1017,7 +1093,7 @@ src/test/resources/cases/<caseId>/
 | 编号   | 决策                                                                                          | 涉及章节           |
 | ---- | ------------------------------------------------------------------------------------------- | -------------- |
 | DD-1 | 取消 `StatementCategory` 独立枚举，归类由 `level` + skipped 表达                                       | §4.1           |
-| DD-2 | CLI 手写解析（不引入 picocli 等框架），参数仅 8 个                                                        | §5             |
+| DD-2 | CLI 手写解析（不引入 picocli 等框架），参数保持精简集合（v1.8 含 `--dialect/--db-url/--db-username/--db-password`）                                                        | §5             |
 | DD-3 | XML 原文切片依赖 SAX `Locator` 的 endElement 行号语义（JDK Xerces），编入单测                                   | §9.2           |
 | DD-4 | `<choose>` 骨架**惰性枚举**，`MAX_SKELETONS=8` 上限，超限截断并标 `truncated/uncertain`（需求方已确认）                | §10.2          |
 | DD-5 | 解析失败在 skipped[] 中以 `kind=PARSE_FAILED` + reason 前缀"解析失败："区分                                   | §4.2、§10.6     |
@@ -1028,8 +1104,11 @@ src/test/resources/cases/<caseId>/
 | DD-10 | 多表谓词列归属歧义 → 归 `UNRESOLVED`，不参与 M1/M6 判定（需求方已确认）                                              | §10.5          |
 | DD-11 | 单文件 5MB / include 深度 32 防护阈值                                                                 | §17            |
 | DD-12 | 报告 DTO 与模型 1:1、`serializeNulls`、字段顺序固定                                                        | §12.3          |
+| DD-13 | 元数据 **JDBC 一次快照**：P1 单次连接加载 → 关闭 → 只读内存（不重复连接/加载）；失败即 exit 2（v1.8/D24）                           | §7、§13.2       |
+| DD-14 | **方言扩展流程**：实现 `SqlDialect` → `SqlDialects` 注册 → 分页识别用例 → 放开配置值；未支持值报错不降级（v1.8/D25）                     | §10.7          |
+| DD-15 | JDBC 驱动**直接在 pom 中引用**（MySQL Connector/J，compile → 随 shaded jar；无外置驱动目录）；测试元数据用 H2 内存库（test scope）（v1.8/D27，2026-10-15 确认）        | §7、§18.2       |
 
-> DD-4、DD-8、DD-9、DD-10 已由需求方确认（2026-10-14）；其余 DD 项为实现级细化，随编码落地，如与需求方预期不符走评审调整。
+> DD-4、DD-8、DD-9、DD-10 已由需求方确认（2026-10-14）；DD-13/DD-14 随 2026-10-15 扩展需求确认，DD-15 待复核；其余 DD 项为实现级细化，随编码落地，如与需求方预期不符走评审调整。
 
 ***
 
@@ -1059,6 +1138,9 @@ src/test/resources/cases/<caseId>/
 | §11 非功能             | §16、§17               |
 | §12 测试              | §18                   |
 | §14 D1~D23          | §19 DD 清单（补充细化）       |
+| §14 D24~D27（v1.8）   | §7、§10.7、§6、§5（DD-13~DD-15） |
+| FR-8 数据库元数据（需求 v1.1） | §7、§13.2、§15、§18.2  |
+| FR-9 多方言（需求 v1.1）    | §10.4、§10.5、§10.7、§6、§5 |
 
 ***
 
@@ -1119,8 +1201,11 @@ SQL 上线风险静态检查工具 v0.1
   --repo <path>        目标 Git 仓库绝对路径（必填）
   --head-commit <sha>  当前分支最新 commit；缺省取 HEAD。仅分析已提交内容
   --prod-commit <sha>  生产 commit id；不传则对 head 提交树做全量分析
-  --config <path>      规则/白名单配置文件（yaml）；缺省用内置默认配置
-  --metadata <path>    表元数据 JSON；缺省读仓库根 sql-risk-metadata.json（必需，缺失报错）
+  --config <path>      规则/白名单/数据库连接配置文件（yaml）；缺省用内置默认配置
+  --dialect <name>     SQL 方言；缺省 mysql（oracle/postgresql 为预留值，未实现报错）
+  --db-url <url>       数据库 JDBC URL（元数据来源；未传读 yaml datasource.url）
+  --db-username <u>    数据库账号（未传读 yaml）
+  --db-password <pwd>  数据库密码（优先级：本参数 > 环境变量 SQL_RISK_DB_PASSWORD > yaml）
   --output <path>      报告输出目录；缺省当前目录
   --format json        显式声明结构化输出（缺省即控制台 + JSON 双输出）
   --verbose            输出详细过程日志与中低危明细（stderr）
@@ -1144,3 +1229,7 @@ SQL 上线风险静态检查工具 v0.1
 *v1.6（2026-10-15，需求方驱动）：§11.2 增「空骨架归口」——解析产物为空（含 `${}` 解析失败的短路候选）且语句级短路未命中时归 SKIP（PARSE_FAILED），不再作为 `level=null` 结果输出；短路命中语义不变（AC-11）。§10.6/§18.3 同步。*
 
 *v1.7（2026-10-15，需求方驱动）：§12.5 HTML 报告文案与统计——「未命中风险规则/无命中」更名为「**通过**」（分区标题、卡片徽标、恒等式行口径），头部统计卡片新增「通过」数量；JSON 报告契约不变。*
+
+*v1.8（2026-10-15，需求方扩展驱动，FR-8/FR-9）：① §7 重写——元数据改为 `JdbcMetadataProvider` **JDBC 一次加载**（连接即关、失败 exit 2），文件通道（`JsonMetadataProvider`/`--metadata`/`metadata_file`）移除（D24/DD-13）；② §10.4/§10.5/新增 §10.7——`SqlDialect` 方言 SPI（MySQL 实现 + Oracle/PG 预留要点 + 未支持值报错，D25/DD-14）；③ §6 增 `DataSourceSetting` 与连接三通道/密码优先级（D26）；④ §7/§18.2 JDBC 驱动**pom 内嵌**（MySQL Connector/J）与 H2 测试载体（D27/DD-15，2026-10-15 确认）；⑤ §5/§13/§15/§17/§18/附录 B 同步。*
+
+*v1.8 实现回写（2026-10-15，M10/M11 落地）：① §7 类型跨库别名归一（CHARACTER VARYING/CHAR VARYING→VARCHAR、CHARACTER→CHAR、INTEGER→INT，H2 实测）；② §6 ConfigLoader 增环境变量注入重载（测试用，密码优先级语义不变）；③ §10.7 方言经 `ParseContext` 装配（3 参构造缺省 MySQL，引擎注入配置值）；④ 概要设计 §3.3 依赖图新增 `config → parser` 边（方言取值校验经 `SqlDialects.supportedNames()`，无环）。*

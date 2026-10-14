@@ -1,0 +1,1 @@
+CREATE TABLE t_order (id BIGINT, flag TINYINT, PRIMARY KEY (id));

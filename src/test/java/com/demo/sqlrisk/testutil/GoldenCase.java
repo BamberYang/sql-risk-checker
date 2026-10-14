@@ -22,7 +22,7 @@ import java.util.stream.Stream;
  * ├── changes/              可选：第二次提交（head）新增/修改的文件（同名覆盖）
  * ├── deleted.txt           可选：head 提交时删除的文件路径（每行一个，# 开头为注释）
  * ├── config.yaml           可选
- * ├── metadata.json         可选
+ * ├── schema.sql            可选：H2 兼容 DDL，测试启动时执行到内存库（v1.8 替代 metadata.json）
  * ├── args                  可选：手工场景的命令行参数文本
  * └── expected/report.json  期望报告（JSON，必需）
  * </pre>
@@ -35,7 +35,7 @@ public final class GoldenCase {
     private final Set<String> deletedFiles;
     private final String expectedReportJson;
     private final String configYaml;   // nullable
-    private final String metadataJson; // nullable
+    private final String schemaSql;    // nullable：H2 内存库建表 DDL（元数据来源，v1.8/FR-8）
     private final String argsText;     // nullable
 
     private GoldenCase(Path caseDir,
@@ -44,7 +44,7 @@ public final class GoldenCase {
                        Set<String> deletedFiles,
                        String expectedReportJson,
                        String configYaml,
-                       String metadataJson,
+                       String schemaSql,
                        String argsText) {
         this.caseDir = caseDir;
         this.initialFiles = initialFiles;
@@ -52,7 +52,7 @@ public final class GoldenCase {
         this.deletedFiles = deletedFiles;
         this.expectedReportJson = expectedReportJson;
         this.configYaml = configYaml;
-        this.metadataJson = metadataJson;
+        this.schemaSql = schemaSql;
         this.argsText = argsText;
     }
 
@@ -76,7 +76,7 @@ public final class GoldenCase {
                 readDeleted(caseDir.resolve("deleted.txt")),
                 new String(Files.readAllBytes(expected), StandardCharsets.UTF_8),
                 readOptional(caseDir.resolve("config.yaml")),
-                readOptional(caseDir.resolve("metadata.json")),
+                readOptional(caseDir.resolve("schema.sql")),
                 readOptional(caseDir.resolve("args")));
     }
 
@@ -109,9 +109,9 @@ public final class GoldenCase {
         return configYaml;
     }
 
-    /** 可为 null。 */
-    public String metadataJson() {
-        return metadataJson;
+    /** 可为 null：H2 兼容 DDL（v1.8 起元数据经内存库加载，见 AnalysisEngineIT）。 */
+    public String schemaSql() {
+        return schemaSql;
     }
 
     /** 可为 null。 */

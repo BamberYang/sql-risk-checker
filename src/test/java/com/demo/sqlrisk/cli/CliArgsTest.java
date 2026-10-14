@@ -15,14 +15,19 @@ class CliArgsTest {
     void parses_all_options() {
         CliArgs args = CliArgs.parse(new String[]{
                 "--repo", "/repo", "--head-commit", "h1", "--prod-commit", "p1",
-                "--config", "/c.yaml", "--output", "/out", "--metadata", "/m.json",
+                "--config", "/c.yaml", "--output", "/out",
+                "--dialect", "mysql", "--db-url", "jdbc:mysql://h/db",
+                "--db-username", "u", "--db-password", "p",
                 "--format", "json", "--verbose"});
         assertEquals("/repo", args.repoPath());
         assertEquals("h1", args.headCommit());
         assertEquals("p1", args.prodCommit());
         assertEquals("/c.yaml", args.configPath());
         assertEquals("/out", args.outputDir());
-        assertEquals("/m.json", args.metadataPath());
+        assertEquals("mysql", args.dialect());
+        assertEquals("jdbc:mysql://h/db", args.dbUrl());
+        assertEquals("u", args.dbUsername());
+        assertEquals("p", args.dbPassword());
         assertTrue(args.verbose());
         assertFalse(args.helpRequested());
     }
@@ -35,7 +40,10 @@ class CliArgsTest {
         assertNull(args.headCommit());
         assertNull(args.prodCommit());
         assertNull(args.configPath());
-        assertNull(args.metadataPath());
+        assertNull(args.dialect());
+        assertNull(args.dbUrl());
+        assertNull(args.dbUsername());
+        assertNull(args.dbPassword());
     }
 
     @Test
@@ -84,7 +92,16 @@ class CliArgsTest {
     void usage_text_lists_options_and_exit_codes() {
         String usage = CliArgs.usage();
         assertTrue(usage.contains("--repo"));
-        assertTrue(usage.contains("--metadata"));
+        assertTrue(usage.contains("--db-url"));
+        assertTrue(usage.contains("--dialect"));
         assertTrue(usage.contains("退出码"));
+    }
+
+    @Test
+    void removed_metadata_option_fails_with_guidance() {
+        CliUsageException e = assertThrows(CliUsageException.class,
+                () -> CliArgs.parse(new String[]{"--repo", "/repo", "--metadata", "/m.json"}));
+        assertTrue(e.getMessage().contains("已移除"), e.getMessage());
+        assertTrue(e.getMessage().contains("--db-url"), e.getMessage());
     }
 }

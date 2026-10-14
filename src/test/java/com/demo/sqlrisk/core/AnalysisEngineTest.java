@@ -1,6 +1,7 @@
 package com.demo.sqlrisk.core;
 
 import com.demo.sqlrisk.config.AppConfig;
+import com.demo.sqlrisk.config.CliOverrides;
 import com.demo.sqlrisk.config.ConfigLoader;
 import com.demo.sqlrisk.diff.DiffException;
 import com.demo.sqlrisk.metadata.MetadataException;
@@ -15,7 +16,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
@@ -42,20 +42,18 @@ class AnalysisEngineTest {
                 .commit("prod", Collections.singletonMap("mapper/A.xml", xml("v1")))
                 .commit("head", Collections.singletonMap("mapper/A.xml", xml("v2")))
                 .finish();
-        writeMetadata(repoDir);
     }
 
     private static String xml(String version) {
         return "<mapper namespace=\"m\"><select id=\"s\">SELECT " + version + "</select></mapper>";
     }
 
-    private static void writeMetadata(Path dir) throws Exception {
-        Files.write(dir.resolve("sql-risk-metadata.json"),
-                "{\"version\":\"1.0\",\"tables\":[]}".getBytes(StandardCharsets.UTF_8));
+    private RunContext context(String headArg, String prodArg, Path targetDir) {
+        return context(headArg, prodArg, targetDir, "jdbc:h2:mem:engine-test;DB_CLOSE_DELAY=-1");
     }
 
-    private RunContext context(String headArg, String prodArg, Path targetDir) {
-        AppConfig config = ConfigLoader.load(null, null, targetDir.toString());
+    private RunContext context(String headArg, String prodArg, Path targetDir, String dbUrl) {
+        AppConfig config = ConfigLoader.load(new CliOverrides(null, null, dbUrl, "sa", ""), targetDir.toString());
         return new RunContext(targetDir.toString(), headArg, prodArg, config, ".", false, TestClocks.fixed());
     }
 
@@ -111,17 +109,17 @@ class AnalysisEngineTest {
     }
 
     @Test
-    void missing_metadata_fails_fast_with_exit_2() throws Exception {
-        Files.delete(repoDir.resolve("sql-risk-metadata.json"));
+    void metadata_load_failure_fails_fast_with_exit_2() {
+        // v1.8/FR-8：数据库不可用（未知驱动/连接失败）→ MetadataException → exit 2
         MetadataException e = assertThrows(MetadataException.class, () -> new AnalysisEngine(TestClocks.fixed())
-                .execute(context(null, null, repoDir)));
+                .execute(context(null, null, repoDir, "jdbc:unknown-subprotocol://127.0.0.1/none")));
         assertEquals(2, e.exitCode());
+        assertTrue(e.getMessage().contains("数据库元数据加载失败"), e.getMessage());
     }
 
     @Test
     void non_git_repo_fails_with_exit_2() throws Exception {
         Path plain = Files.createDirectories(tempDir.resolve("plain"));
-        writeMetadata(plain);
         DiffException e = assertThrows(DiffException.class, () -> new AnalysisEngine(TestClocks.fixed())
                 .execute(context(null, null, plain)));
         assertTrue(e.getMessage().contains("非 git 仓库"));
@@ -137,8 +135,6 @@ class AnalysisEngineTest {
                 .commit("head", Collections.singletonMap("mapper/Ok.xml",
                         "<mapper namespace=\"m\"><select id=\"s\">SELECT 1</select></mapper>"))
                 .finish();
-        writeMetadata(dir);
-
         ReportModel report = new AnalysisEngine(TestClocks.fixed()).execute(context(null, null, dir));
         assertEquals(1, report.summary().skip(), "解析失败的 XML → SKIP 计数");
         assertEquals(1, report.skipped().size());
@@ -154,8 +150,6 @@ class AnalysisEngineTest {
                 .commit("prod", Collections.singletonMap("mapper/Bad.xml",
                         "<mapper namespace=\"m\"><select id=\"bad\">THIS IS NOT SQL</select></mapper>"))
                 .finish();
-        writeMetadata(dir);
-
         ReportModel report = new AnalysisEngine(TestClocks.fixed()).execute(context(null, null, dir));
         assertEquals(1, report.summary().skip());
         assertEquals(1, report.skipped().size());
@@ -172,8 +166,6 @@ class AnalysisEngineTest {
                 .commit("prod", Collections.singletonMap("mapper/U.xml",
                         "<mapper namespace=\"m\"><update id=\"u\">UPDATE t_order SET status = 1</update></mapper>"))
                 .finish();
-        writeMetadata(dir);
-
         ReportModel report = new AnalysisEngine(TestClocks.fixed()).execute(context(null, null, dir));
         assertEquals(1, report.summary().total());
         assertEquals(1, report.summary().high());

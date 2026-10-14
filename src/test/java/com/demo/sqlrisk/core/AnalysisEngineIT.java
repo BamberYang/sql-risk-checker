@@ -1,9 +1,9 @@
 package com.demo.sqlrisk.core;
 
 import com.demo.sqlrisk.config.AppConfig;
+import com.demo.sqlrisk.config.CliOverrides;
 import com.demo.sqlrisk.config.ConfigLoader;
 import com.demo.sqlrisk.diff.GitRepo;
-import com.demo.sqlrisk.metadata.JsonMetadataProvider;
 import com.demo.sqlrisk.model.ReportModel;
 import com.demo.sqlrisk.model.RiskLevel;
 import com.demo.sqlrisk.model.StatementResult;
@@ -14,16 +14,20 @@ import com.demo.sqlrisk.testutil.GoldenCase;
 import com.demo.sqlrisk.testutil.GoldenCaseRunner;
 import com.demo.sqlrisk.testutil.TestClocks;
 import com.demo.sqlrisk.util.SqlRiskException;
+import org.h2.tools.RunScript;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -84,11 +88,8 @@ class AnalysisEngineIT {
         GoldenCase goldenCase = input.goldenCase();
         Path repoPath = input.repoPath();
 
-        // 元数据为必需输入：用例提供则落盘到仓库根默认路径（引擎自文件系统读取，与提交树无关）
-        String metadataJson = goldenCase.metadataJson() != null
-                ? goldenCase.metadataJson() : "{\"version\":\"1.0\",\"tables\":[]}";
-        Path metadataFile = repoPath.resolve("sql-risk-metadata.json");
-        Files.write(metadataFile, metadataJson.getBytes(StandardCharsets.UTF_8));
+        // 元数据（v1.8/FR-8）：用例 schema.sql → H2 内存库 → JdbcMetadataProvider 加载（替代 metadata.json）
+        String dbUrl = openCaseDatabase(goldenCase);
 
         String configPath = null;
         if (goldenCase.configYaml() != null) {
@@ -97,12 +98,26 @@ class AnalysisEngineIT {
             configPath = configFile.toString();
         }
 
-        AppConfig config = ConfigLoader.load(configPath, metadataFile.toString(), repoPath.toString());
+        AppConfig config = ConfigLoader.load(new CliOverrides(configPath, null, dbUrl, "sa", ""),
+                repoPath.toString());
         RunContext ctx = new RunContext(repoPath.toString(), null, prodCommitArg(goldenCase, input), config,
                 repoPath.toString(), false, TestClocks.fixed());
         ReportModel report = new AnalysisEngine(TestClocks.fixed()).execute(ctx);
         assertSummaryConsistency(report);
         return com.demo.sqlrisk.report.JsonReporter.toJson(report);
+    }
+
+    /** 用例内存库：执行 schema.sql（可无）到独立 H2 内存库，返回 JDBC URL（DB_CLOSE_DELAY=-1 保持会话内可用）。 */
+    static String openCaseDatabase(GoldenCase goldenCase) throws Exception {
+        String dbName = "case_" + goldenCase.caseId().replaceAll("[^A-Za-z0-9_]", "_");
+        String url = "jdbc:h2:mem:" + dbName + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("DROP ALL OBJECTS"); // 幂等：同用例重复执行（确定性测试）可重建
+            if (goldenCase.schemaSql() != null) {
+                RunScript.execute(connection, new StringReader(goldenCase.schemaSql()));
+            }
+        }
+        return url;
     }
 
     /** args 文件（可含 {prod}/{head} 占位）：仅取 --prod-commit；缺省 → null → FULL 模式。 */
@@ -151,21 +166,22 @@ class AnalysisEngineIT {
             // 非 git 仓库
             assertExit2(assertThrows(SqlRiskException.class,
                     () -> GitRepo.open(plain.toString())), "非 git 仓库");
-            // 元数据缺失
+            // 数据库元数据加载失败（v1.8/FR-8：驱动/连接不可用 → exit 2）
             assertExit2(assertThrows(SqlRiskException.class,
-                    () -> JsonMetadataProvider.load(plain.resolve("nope.json"))), "元数据缺失");
+                    () -> com.demo.sqlrisk.metadata.JdbcMetadataProvider.load(
+                            new com.demo.sqlrisk.config.DataSourceSetting(
+                                    "jdbc:unknown-subprotocol://127.0.0.1/none", "u", "p", 2))),
+                    "元数据加载失败（未知驱动/连接不可用）");
+            // datasource.url 未配置（默认配置为空 → 校验失败）
+            assertExit2(assertThrows(SqlRiskException.class,
+                    () -> ConfigLoader.load(new CliOverrides(null, null, null, null, null),
+                            plain.toString())), "datasource.url 未配置");
+            // 方言未支持（预留值 → 明确报错不降级）
+            assertExit2(assertThrows(SqlRiskException.class,
+                    () -> ConfigLoader.load(new CliOverrides(null, "oracle", "jdbc:h2:mem:x", "sa", ""),
+                            plain.toString())), "方言未支持");
         } finally {
             GoldenCaseRunner.deleteRecursively(plain);
-        }
-
-        // 元数据格式错误
-        Path badMeta = Files.createTempFile("ac09-meta-", ".json");
-        Files.write(badMeta, "{ not json".getBytes(StandardCharsets.UTF_8));
-        try {
-            assertExit2(assertThrows(SqlRiskException.class,
-                    () -> JsonMetadataProvider.load(badMeta)), "元数据格式错误");
-        } finally {
-            Files.deleteIfExists(badMeta);
         }
 
         // 坏配置（非法白名单模式：含通配符段） + 非法 commit（需真实仓库）
@@ -180,7 +196,8 @@ class AnalysisEngineIT {
             Files.write(badConfig, "whitelist:\n  statements:\n    - \"com.*.mapper\"\n"
                     .getBytes(StandardCharsets.UTF_8));
             assertExit2(assertThrows(SqlRiskException.class,
-                    () -> ConfigLoader.load(badConfig.toString(), null, repo.path().toString())),
+                    () -> ConfigLoader.load(new CliOverrides(badConfig.toString(), null,
+                            "jdbc:h2:mem:ac09;DB_CLOSE_DELAY=-1", "sa", ""), repo.path().toString())),
                     "坏配置：非法白名单模式");
             try (GitRepo gitRepo = GitRepo.open(repo.path().toString())) {
                 assertExit2(assertThrows(SqlRiskException.class,

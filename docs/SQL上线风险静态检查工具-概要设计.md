@@ -7,9 +7,9 @@
 | 项    | 内容                                          |
 | ---- | ------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具概要设计                          |
-| 版本   | v1.7                                        |
-| 日期   | 2026-10-14                                  |
-| 关联文档 | 《SQL 上线风险静态检查工具需求文档》v1.0（下称"需求文档"）          |
+| 版本   | v1.8                                        |
+| 日期   | 2026-10-15                                  |
+| 关联文档 | 《SQL 上线风险静态检查工具需求文档》v1.1（下称"需求文档"）          |
 | 覆盖范围 | 总体架构、模块划分、接口契约、关键流程与算法、数据模型、异常处理、测试设计、需求追溯 |
 | 不含范围 | 类级方法实现细节、逐行伪码、UI 文案细节（归详细设计阶段）              |
 
@@ -25,6 +25,7 @@
 | v1.5 | 2026-10-14 | 按需求方评审意见更新：FULL 模式缺省取当前 HEAD 提交树进行全量分析，同样不包含工作区未提交内容（两个模式数据源统一为提交树） |
 | v1.6 | 2026-10-14 | 按需求方评审意见更新：确认普通 QueryWrapper / BaseMapper 内置方法**不纳入** v1 扫描范围（写入 §15 已知限制）；确认 JSON 报告追加字段（含 `changeType: FULL`）可接受 |
 | v1.7 | 2026-10-14 | 按需求方评审意见更新：确认 XML 解析采用 JDK SAX + Locator（决策 D3）；全部决策确认完毕，待确认事项清零 |
+| v1.8 | 2026-10-15 | 扩展设计（FR-8/FR-9）：① 元数据来源改为**数据库运行时加载**（JDBC，一次快照），文件元数据通道彻底移除（D24）；② 新增 **`SqlDialect` 方言 SPI**，v1 实现 MySQL、Oracle/PostgreSQL 预留（D25）；③ 连接配置三通道与密码优先级（D26）；④ JDBC 驱动**直接在 pom 中引用**（随 shaded jar 分发）、测试元数据改用 H2 内存库（D27） |
 
 > 本文档中标注【决策】的条目为概要设计阶段新增的设计决定，标注【假设】的条目需需求方确认后方可进入编码（汇总见 §14）。
 
@@ -37,8 +38,8 @@
 1. 以管道化架构实现「差异获取 → 语句提取 → 解析规范化 → 规则分析 → 报告输出」五阶段闭环。
 2. 三种 SQL 承载形态（mapper.xml / 注解 / Lambda 构造）收敛到统一的解析与规则管道，规则只实现一次。
 3. 保守策略（FR-5）作为贯穿全局的默认语义：动态条件一律按最不利假设求值。
-4. 规则引擎可插拔：新增规则只新增一个实现 + 注册，不改动核心流程。
-5. 离线、只读、零副作用：不连数据库、不执行 SQL、不修改目标仓库、不访问网络。
+4. 规则引擎可插拔：新增规则只新增一个实现 + 注册，不改动核心流程；方言可插拔：新增数据库只需实现 `SqlDialect` SPI 并注册（FR-9）。
+5. 只读、零副作用：仅连接配置的数据库**读取元数据一次**（FR-8），不执行任何业务 SQL、不修改目标仓库、不访问互联网。
 
 ### 2.2 设计原则
 
@@ -94,22 +95,23 @@
 | `cli`        | main 入口、参数解析与校验、退出码、控制台摘要渲染的触发                                      | `SqlRiskCheckerMain`、`CliArgs`、`ExitCode`                                                                                                                |
 | `core`       | 阶段编排（P0~P9）、并行调度、白名单过滤、结果汇总、退出码判定                                   | `AnalysisEngine`、`Pipeline`、`RunContext`、`AnalysisResult`、`WhitelistFilter`                                                                          |
 | `config`     | yaml 配置加载、默认值合并、schema 校验、配置优先级                                     | `AppConfig`、`ConfigLoader`、`ConfigValidator`、`RuleConfig`                                                                                                |
-| `metadata`   | 表元数据（表/字段/索引）加载与查询，`MetadataProvider` SPI                        | `MetadataProvider`、`JsonMetadataProvider`、`TableMetadata`、`FieldMeta`、`IndexMeta`                                                                         |
+| `metadata`   | 表元数据（表/字段/索引）**由 JDBC 从数据库加载一次**（快照供只读查询），`MetadataProvider` SPI                        | `MetadataProvider`、`JdbcMetadataProvider`、`TableMetadata`、`FieldMeta`、`IndexMeta`                                                                         |
 | `diff`       | JGit 差异获取、全量扫描、变更行集合、`ProductionCommitProvider` SPI                | `GitDiffService`、`ChangeSet`、`FileChange`、`Hunk`、`ProductionCommitProvider`、`RepoWalker`                                                                  |
 | `extractor`  | 语句提取三个实现 + 统一 SPI；statementId 生成；变更类型判定；XML 片段索引与派生变更传播                 | `SqlSourceExtractor`、`MapperXmlExtractor`、`XmlFragmentIndex`、`AnnotationSqlExtractor`、`LambdaSqlExtractor`、`EntityIndex`、`TableColumnResolver`、`JavaConstantResolver`、`ProviderMethodResolver` |
-| `parser`     | 动态 SQL 保守求值（骨架生成 + 丢弃溯源）、Lambda 骨架渲染、占位符归一化、Druid 解析、语句事实提取       | `DynamicEvaluator`、`LambdaSkeletonRenderer`、`PlaceholderNormalizer`、`DruidSqlParser`、`QueryFacts`、`SqlSkeleton`、`DroppedBranch`、`ParseFailure`        |
+| `parser`     | 动态 SQL 保守求值（骨架生成 + 丢弃溯源）、Lambda 骨架渲染、占位符归一化、**按方言** Druid 解析与事实提取（`SqlDialect` SPI）       | `DynamicEvaluator`、`LambdaSkeletonRenderer`、`PlaceholderNormalizer`、`DruidSqlParser`、`SqlDialect`、`SqlDialects`、`QueryFacts`、`SqlSkeleton`、`DroppedBranch`、`ParseFailure`        |
 | `rule`       | 规则 SPI、注册与配置覆盖、执行顺序与短路、内置规则                                             | `Rule`、`RuleEngine`、`RuleRegistry`、`RuleContext`、`builtin`（内置规则实现）                                                                                     |
 | `report`     | 控制台摘要与 JSON 报告生成、文件写出                                                | `ConsoleReporter`、`JsonReporter`、`ReportWriter`、`ReportModel`                                                                                             |
 | `model`      | 跨模块数据模型（枚举/值对象），零依赖                                                | `SqlChange`、`ChangeType`、`StatementSource`、`RiskLevel`、`Finding`、`SkippedItem`、`IgnoredItem`                                                             |
 | `util`       | 文本/编码/范围工具                                                          | `TextUtils`、`LineRanges`、`IoUtils`                                                                                                                        |
 
-> 说明：需求 §13 未单列 `metadata` 与 `core`，本设计将其显式化——`metadata` 独立是因为存在 `MetadataProvider` SPI 与独立 JSON 文件契约；`core` 独立是为了让 `cli` 只负责对外契约、避免编排逻辑沉淀在入口类中。
+> 说明：需求 §13 未单列 `metadata` 与 `core`，本设计将其显式化——`metadata` 独立是因为存在 `MetadataProvider` SPI 与**独立的元数据加载生命周期**（连接/快照/关闭，v1.8 起来源为数据库）；`core` 独立是为了让 `cli` 只负责对外契约、避免编排逻辑沉淀在入口类中。
 
 ### 3.3 模块依赖方向（硬约束）
 
 ```
 cli → core → {config, diff, extractor, parser, rule, report}
 config → metadata
+config → parser（v1.8 实现注记：方言取值校验经 parser.SqlDialects.supportedNames()，无环）
 diff → model
 extractor → {model, java解析, xml解析}
 parser → {model, metadata(只读), Druid}
@@ -158,8 +160,11 @@ sql-risk-checker/                      # 单模块 Maven 工程
 | mybatis-plus-core | 3.5.x                 | 链式方法 API 基准、符号解析辅助               | 需求已锁定              |
 | slf4j-nop        | 1.7.36                | 静默 JGit 的 slf4j 告警               | 兼容                 |
 | JUnit 5          | 5.10.x                | 单元/集成测试                          | 兼容（test scope）     |
+| JDBC（java.sql）   | JDK 内置                | 元数据加载（FR-8）                      | 兼容（零新增依赖）          |
+| MySQL Connector/J | 8.0.x（compile）        | JDBC 驱动**直接在 pom 中引用**，随 shaded jar 分发（D27） | 兼容；后续 Oracle/PostgreSQL 驱动在对应方言实现时加入 pom |
+| H2               | 2.2.x                 | 元数据加载与黄金用例的离线测试载体（test scope）     | 兼容（test scope；仅测试使用） |
 
-> 全量依赖离线可解析（内网 Maven 镜像/本地仓库），运行期不访问网络。
+> 全量依赖离线可解析（内网 Maven 镜像/本地仓库），运行期不访问互联网；连接业务库仅用于读取元数据（FR-8）。
 
 ***
 
@@ -170,7 +175,7 @@ sql-risk-checker/                      # 单模块 Maven 工程
 | 阶段  | 名称        | 输入                                | 输出                                              | 失败策略                                    |
 | --- | --------- | --------------------------------- | ----------------------------------------------- | --------------------------------------- |
 | P0  | 参数装配      | 命令行参数                             | `RunContext`                                    | 缺参/非法值 → stderr + exit 2                |
-| P1  | 配置加载校验    | 用户 yaml、表元数据 JSON、缺省配置            | `AppConfig`、`MetadataProvider`                  | 配置错误 → exit 2                          |
+| P1  | 配置加载校验    | 用户 yaml、缺省配置、数据库连接（元数据来源）          | `AppConfig`、`MetadataProvider`（JDBC 一次加载的快照）   | 配置错误 / 元数据加载失败 → exit 2                  |
 | P2  | 模式判定与差异获取 | repo、head/prod commit              | `ChangeSet`（差异模式）或候选文件清单（全量模式，取自 head 提交树）        | 非 git 仓库/非法 commit → exit 2             |
 | P3  | 语句提取      | `ChangeSet` + extractor SPI + 全仓 XML 片段索引 | `List<ExtractedStatement>`（含片段派生变更命中的语句）+ `skipped[]` | 单文件失败隔离，不终止整体 |
 | P4  | 白名单过滤     | 语句集合 + 白名单配置                      | 分析集合 + `ignored[]`                              | —                                       |
@@ -236,7 +241,7 @@ CLI          Engine         Config/Diff     Extractor      Parser        Rule   
 - 职责：解析参数 → 构造 `RunContext` → 调用 `AnalysisEngine.run()` → 打印摘要 → 返回退出码。
 - 参数定义与需求 FR-7 完全一致（见 §9.1），额外约定：
   - 未知参数、必填缺失、`--format` 取值非 `json`（本版仅支持 json，缺省即"控制台 + JSON 双输出"，该参数用于显式声明）→ 参数错误 exit 2。
-  - 参数冲突：`--metadata` 与 yaml 中 `metadata_file` 同时存在时，**CLI 优先**。
+  - 连接参数优先级：`--db-url` / `--db-username` / `--db-password` / `--dialect` 覆盖 yaml 同名项；密码三级优先级 **CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml**（D26）。
 - 控制台摘要输出到 **stdout**；进度、警告、错误输出到 **stderr**（`--verbose` 控制详细度），保证 stdout 可被管道消费。
 
 ### 5.2 config
@@ -254,7 +259,10 @@ CLI          Engine         Config/Diff     Extractor      Parser        Rule   
 | `rules[].ruleId`              | 必须是内置规则 ID（未知 ID → 警告并以默认值继续，不报错）                          |
 | `rules[].level`               | 必须是 `HIGH/MEDIUM/LOW` 之一                                  |
 | `whitelist.statements[]`      | 仅允许「完整匹配」或 `namespace.*` 前缀匹配；出现 `*` 位于中段、多个 `*` 等非法模式 → 报错 |
-| `metadata_file`               | 相对路径以**配置文件所在目录**为基准解析；文件缺失统一报错（§5.3）                     |
+| `datasource.url`              | 必填（CLI `--db-url` 可提供）；须为 `jdbc:` 前缀                                  |
+| `datasource.url`              | 必填（CLI `--db-url` 可提供）；须为 `jdbc:` 前缀                                  |
+| `dialect`                     | 取值必须 ∈ 已支持方言列表（v1 仅 `mysql`）；未实现值 → 报错 exit 2（不静默降级，D25）           |
+| `metadata_file`               | **已移除键**（v1.8）：出现时告警并忽略（元数据来源为数据库，D24）                          |
 
 ### 5.3 metadata
 
@@ -265,9 +273,10 @@ public interface MetadataProvider {
 }
 ```
 
-- 默认实现 `JsonMetadataProvider` 读取 `table-metadata.json`（结构见 §9.3），加载后建立 `表名 → TableMetadata` 索引。
-- **文件缺失语义**【决策 D12（已确认）】：表元数据为**必需输入**——无论通过 `--metadata` 显式指定还是使用默认路径（仓库根 `sql-risk-metadata.json`），文件不存在或格式错误一律报错并 exit 2；不再提供"缺失视为空元数据"的降级路径。
-- 预留扩展：后续实现 `DbMetadataProvider`（连库读 `information_schema`）或 `DictMetadataProvider`（读数据字典接口），仅替换实现，规则无感。
+- **唯一实现 `JdbcMetadataProvider`**（v1.8，FR-8/D24）：通过 JDBC 连接目标数据库**一次性加载**表/字段与类型/索引（`DatabaseMetaData.getTables/getColumns/getIndexInfo`），建立 `表名 → TableMetadata` 内存快照；**连接随后关闭，运行期不再连接、不重复加载**。
+- 驱动加载（D27，2026-10-15 修订）：JDBC 驱动以 **Maven 依赖直接在 pom 中引用**（MySQL Connector/J，compile scope → 随 shaded jar 分发），运行时经 classpath 直接可见，无外置目录机制。
+- **加载失败语义**【承接 D12（v1.8 修订）】：连接失败 / 权限不足 / 元数据查询失败 / 超时一律报错并 exit 2，不存在"缺失视为空元数据"的降级路径。
+- 文件元数据通道（`JsonMetadataProvider`/`--metadata`/`metadata_file`）**已移除**（D24）；`MetadataProvider` SPI 保留，未来可扩展数据字典等来源。
 
 ### 5.4 diff
 
@@ -373,7 +382,7 @@ public final class ExtractedStatement {
 1. `DynamicEvaluator`（mapper.xml / `<script>` 注解）：按保守策略对 `<if>/<choose>/<when>/<otherwise>/<where>/<trim>/<set>/<foreach>/<include>` 求值，产出 1~N 个 `SqlSkeleton`，并记录 `DroppedBranch` 溯源（折叠规则表见 §8.2）。
 2. `LambdaSkeletonRenderer`：由 §5.5.4 的链式模型渲染骨架文本。
 3. `PlaceholderNormalizer`：`#{...}` → `?`；`${...}` → `?`（同时置 `hasDollarPlaceholder=true` 供 M8 短路）；保留原文切片位置映射，供 Finding 生成 `snippet`。
-4. `DruidSqlParser`：`SQLParserUtils.createSQLStatementParser(sql, DbType.mysql)` → `SQLStatement` AST；同时构建：
+4. `DruidSqlParser`：`SQLParserUtils.createSQLStatementParser(sql, dialect.dbType())` → `SQLStatement` AST（方言由配置决定，缺省 MySQL；D25）；同时构建：
 
 ```java
 public final class QueryFacts {          // 规则唯一读取的"语句事实"（原则 P6）
@@ -491,7 +500,8 @@ AnalysisResult ◄────────────────────�
 | ------------------------- | ------------ | ------------------------ | ------------------------------------------- |
 | `SqlSourceExtractor`      | extractor    | SQL 承载形态提取扩展             | MapperXml / Annotation / Lambda             |
 | `RuleProvider` / `Rule`   | rule         | 规则扩展（ServiceLoader）      | 内置 H1~H3 / M1~M6、M8 / L1、L2、L4             |
-| `MetadataProvider`        | metadata     | 表元数据来源扩展                 | `JsonMetadataProvider`                      |
+| `MetadataProvider`        | metadata     | 表元数据来源扩展                 | `JdbcMetadataProvider`（数据库运行时加载，D24）        |
+| `SqlDialect`              | parser       | 数据库方言扩展（FR-9 预留）          | `MysqlDialect`（默认）；`OracleDialect`/`PostgresqlDialect` 预留 |
 | `ProductionCommitProvider` | diff         | 生产 commit 获取扩展（FR-1 预留）  | `CliArgProductionCommitProvider`            |
 | `Reporter`                | report       | 输出形式扩展（未来 HTML 等）        | `ConsoleReporter` / `JsonReporter`          |
 | `ExecutionPlanAnalyzer`   | （预留空接口）      | 未来执行计划分析（需求 §4.2 范围外预留） | 无（仅接口与调用点占位）                                |
@@ -503,6 +513,13 @@ public interface RuleProvider { List<Rule> rules(); }
 
 public interface ProductionCommitProvider {
     Optional<String> provide(RepoContext ctx);
+}
+
+/** 方言 SPI（FR-9/D25）：新增数据库 = 实现本接口 + 注册 + 用例 */
+public interface SqlDialect {
+    String name();                            // "mysql"（配置值）
+    DbType dbType();                          // Druid 方言映射
+    boolean hasRowLimit(SQLStatement ast);    // 分页/限制子句识别（H3/L4 事实；MySQL=LIMIT，Oracle=ROWNUM/FETCH FIRST，PG=LIMIT/FETCH FIRST）
 }
 
 /** 供未来接入 Explain/执行计划分析：本版无实现，仅占位 */
@@ -631,7 +648,7 @@ boolean hit = id.equals(pattern)                     // 完整匹配
 | 表在元数据中，谓词列/关联列命中某索引**前缀列** | 视为命中索引，M1 不报                                          |
 | 表在元数据中但无任何索引/未命中       | M1 报"条件列未命中索引"                                         |
 | 表**不在**元数据中            | 默认该表无任何索引 → M1 报（宁可误报，避免漏报）                            |
-| 元数据文件缺失（含默认路径）         | 直接报错退出（exit 2），不进入分析（决策 D12）                       |
+| 元数据加载失败（连接/权限/驱动）          | 直接报错退出（exit 2），不进入分析（决策 D12 v1.8 修订 / D24）            |
 | M4 字段类型缺失              | 退化为不判定（需求 §15 明确规定）                                    |
 | 无谓词列的语句（如无 WHERE）      | M1/M6 不适用（不判定），由 H 组覆盖                                  |
 
@@ -651,7 +668,10 @@ boolean hit = id.equals(pattern)                     // 完整匹配
 | `--config <path>`     | 否  | 缺省用内置默认配置                       |
 | `--output <path>`     | 否  | 报告输出目录，缺省当前目录                   |
 | `--format json`       | 否  | 显式声明结构化输出（本版默认即控制台+JSON 双输出）    |
-| `--metadata <path>`   | 否  | 表元数据 JSON（**必需输入**），缺省读取仓库根 `sql-risk-metadata.json`（yaml 的 `metadata_file` 亦可指定，CLI 优先）；文件缺失或格式错误即报错 exit 2 |
+| `--dialect <name>`    | 否  | SQL 方言，缺省 `mysql`；未实现值 → exit 2（D25） |
+| `--db-url <url>`      | 条件 | 数据库 JDBC URL（元数据来源）；未提供时读 yaml `datasource.url` |
+| `--db-username <u>`   | 条件 | 数据库账号；未提供时读 yaml                  |
+| `--db-password <pwd>` | 否  | 密码优先级：CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml（D26） |
 | `--verbose`           | 否  | 输出详细过程日志与中低危明细（本设计新增，stderr 输出） |
 
 退出码：
@@ -660,22 +680,24 @@ boolean hit = id.equals(pattern)                     // 完整匹配
 | - | -------------------------------------------------------- |
 | 0 | 无高危（含"无语句可分析"的正常结束）                                      |
 | 1 | 存在高危（仅由 HIGH 级别命中决定；SKIP/解析失败不触发）【决策 D6（已确认）】                |
-| 2 | 参数/环境错误：仓库不存在、非 git 仓库、非法 commit、配置错误、元数据文件缺失/格式错误、报告写出失败 |
+| 2 | 参数/环境错误：仓库不存在、非 git 仓库、非法 commit、配置错误、方言未支持、数据库元数据加载失败（驱动/连接/权限/超时）、报告写出失败 |
 
 ### 9.2 配置文件（yaml，结构与需求 §9 一致）
 
 见需求 §9。本设计补充：
 
-- 路径解析基准：`metadata_file` 相对**配置文件所在目录**。
+- `datasource` 段承载数据库连接（url/username/password/connection_timeout_seconds）；密码三级优先级见 D26；JDBC 驱动由 pom 依赖提供（D27），配置中无驱动路径项。
+- `dialect` 取值必须为已支持方言（v1 仅 `mysql`）；未实现值 → 报错 exit 2（D25）。
 - 未知 `ruleId` → 警告不报错；非法白名单模式 → 报错 exit 2。
-- 需求 §9 中的 `bulk_operation_threshold` 已随 M7 规则移除【决策 D18】：配置中出现该键时告警并忽略。
-- 需求 §9 中的 `conservative_if_always_false` 开关**已移除**【决策 D10（已确认）】：保守策略固定启用、不可配置关闭；配置中出现该键时告警并忽略。
+- 已移除键（出现时告警并忽略）：`bulk_operation_threshold`（D18）、`conservative_if_always_false`（D10）、`metadata_file`（v1.8/D24）。
 - 缺省配置文件随 jar 内置，无 `--config` 时直接使用。
 
-### 9.3 表元数据（table-metadata.json，结构见需求 §9.1）
+### 9.3 数据库元数据（JDBC 运行时加载，见 §5.3 与需求 §9.1）
 
-- 加载时校验：`table` 非空、`fields[].name/type` 非空、`indexes[].columns` 非空数组；重复表名取首条并警告。
-- 表名/列名匹配统一**大小写不敏感**（MySQL 表名大小写依赖 OS/file system，静态检查场景按不敏感更安全）。
+- 加载内容：表清单（`getTables`）、字段与类型（`getColumns`，类型供 M4）、索引与列序（`getIndexInfo`）。
+- 加载语义：**一次连接、一次加载、连接即关**；运行期内不重复连接；同一进程两次分析（如未来批处理）复用同一快照。
+- 表名/列名匹配统一**大小写不敏感**（数据库差异大，静态检查场景按不敏感更安全）。
+- 加载失败（连接失败/权限不足/查询失败/超时）→ 报错 exit 2（§10）。
 
 ### 9.4 报告
 
@@ -722,7 +744,8 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 | 非 git 仓库                 | P2       | stderr：提示需 git 仓库                          | 2   |
 | 非法 commit id / commit 不存在 | P2       | stderr：包含输入值与 `RevWalk` 校验结果               | 2   |
 | 配置文件缺失/语法错误/校验失败         | P1       | stderr：字段级原因                                 | 2   |
-| 元数据文件缺失（含默认路径）/格式错误       | P1       | stderr：文件路径与 JSON 位置；元数据为必需输入                 | 2   |
+| 方言未支持（如 `dialect: oracle`） | P1       | stderr：列出已支持方言；不静默降级（D25）                    | 2   |
+| 数据库连接失败/权限不足/元数据查询失败/超时   | P1       | stderr：连接目标（脱敏，不含密码）与原因；元数据为必需输入              | 2   |
 | 语句解析失败                   | P6       | 计入 SKIP（`skipped[]` + reason），不中断，不影响退出码      | 0/1 |
 | 语句无法提取（承载形式/Provider）    | P3/P5    | 入 `skipped[]` + reason                       | 不受影响 |
 | 单文件读取失败（编码/IO）           | P3       | 入 `skipped[]` + reason，继续                    | 不受影响 |
@@ -737,10 +760,10 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 | 类别   | 设计措施                                                                                                    |
 | ---- | ------------------------------------------------------------------------------------------------------- |
 | 性能   | 候选文件先行过滤（扩展名/内容特征）→ 只解析相关文件；文件级并行（`min(CPU,8)`）；`EntityIndex` 全仓只建一次并复用；JavaParser `CompilationUnit` 按文件缓存；Druid 单条解析为毫秒级。目标：1k 文件 diff ≤30s |
-| 兼容性  | Java 8 编译与运行（§3.5 版本锁定表）；不连库、不访问网络、离线可运行（DTD 由本地 EntityResolver 兜底）                                       |
+| 兼容性  | Java 8 编译与运行（§3.5 版本锁定表）；不访问互联网、离线可构建可运行（DTD 由本地 EntityResolver 兜底）；运行期仅连接所配置数据库读取元数据一次（FR-8）                                       |
 | 可维护性 | 模块单向依赖（§3.3）；规则 SPI + 配置覆盖；三形态归一到单一管道（原则 P1）                                                            |
 | 可测试性 | 规则/求值器/提取器全部可单测（§12）；时钟注入保证报告可比对                                                                        |
-| 安全   | 只读打开仓库、绝不执行 SQL/不连库；XXE 加固（禁用外部实体）；不在日志中打印敏感业务数据（仅打印 SQL 片段）                                           |
+| 安全   | 只读打开仓库、绝不执行业务 SQL；数据库连接仅用于读取元数据（加载后即关闭）；连接日志脱敏（不打印密码）；XXE 加固（禁用外部实体）；不在日志中打印敏感业务数据（仅打印 SQL 片段）                                           |
 | 日志   | 不使用业务日志框架：进度/警告走 stderr（slf4j-nop 静默 JGit 输出）；stdout 仅报告，保证管道友好                                               |
 | 确定性  | 稳定排序 + 注入时钟 + 并行收集后统一排序（§4.4），同一输入逐字节同一报告                                                            |
 
@@ -757,16 +780,18 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 | `LambdaSkeletonRenderer` + `EntityIndex`                      | 各识别入口、实体解析优先级链、注解/默认驼峰映射、嵌套条件组、布尔重载保守处理         |
 | `WhitelistFilter`                                             | 完整/前缀/非法模式；Lambda 语句不参与                         |
 | `PlaceholderNormalizer` / `DruidSqlParser` / `QueryFacts`     | 占位符归一化、事实提取正确性                                  |
-| `ConfigLoader`/`ConfigValidator`、`JsonMetadataProvider`        | 校验矩阵与缺失语义                                       |
+| `ConfigLoader`/`ConfigValidator`                              | 校验矩阵；`metadata_file` 等已移除键告警；方言取值校验                |
+| `JdbcMetadataProvider`（H2 内存库）                              | 表/字段类型/索引加载正确性；连接失败/超时错误语义；一次加载语义              |
+| `SqlDialect`/`SqlDialects`                                    | 方言注册与取值；未实现方言报错；MySQL 分页事实识别（扩展机制以测试替身验证）          |
 
 ### 12.2 集成（黄金样例）测试
 
 - 夹具：测试内用 JGit **程序化构造临时 git 仓库**（两次提交分别模拟 prod 与 head），case 目录结构：
-  `cases/<caseId>/{repo 生成脚本, config.yaml, metadata.json, expected-report.json}`。
+  `cases/<caseId>/{repo/, changes/, schema.sql, config.yaml, expected/report.json}`；其中 `schema.sql` 为 H2 兼容 DDL，测试启动时执行到**内存库**，由 `JdbcMetadataProvider` 加载元数据（v1.8：替代原 `metadata.json`）。
 - 比对：运行完整管线，报告 JSON 去除 `generatedAt` 后与 expected 全量比对（固定时钟注入）。
 - 覆盖矩阵：3 种承载形态 × 风险等级 × 差异/全量模式 × 白名单 × 保守策略（AC-4：`<if>` 唯一条件折叠后 WHERE 消失 → 直接命中 H1/H2/H3；`<choose>` 双骨架任一命中即停）；含 SKIP 归类用例（解析失败不计入高危、不影响退出码）。
 - 增量语义用例（v1.3 已确认）：`<sql>` 片段内改动 → 全部（含跨文件、传递引用）语句提取完整 SQL 分析；Lambda 链上任意一行（含 wrapper 执行调用行）改动 → 完整链提取。
-- AC 映射：AC-1→diff 用例；AC-2→全量用例（数据源为提交树，断言工作区未提交改动不纳入）；AC-3/4/5→规则与动态用例；AC-6→Lambda 用例；AC-7→白名单用例；AC-8→报告快照；AC-9→错误码用例（非 git 仓库/非法 commit/坏配置/元数据文件缺失各 1）；AC-10→CI 构建；AC-11→`${}` 短路用例。
+- AC 映射：AC-1→diff 用例；AC-2→全量用例（数据源为提交树，断言工作区未提交改动不纳入）；AC-3/4/5→规则与动态用例；AC-6→Lambda 用例；AC-7→白名单用例；AC-8→报告快照；AC-9→错误码用例（非 git 仓库/非法 commit/坏配置/**数据库连接失败**各 1，v1.8 调整）；AC-10→CI 构建；AC-11→`${}` 短路用例；AC-12→元数据一次加载与失败语义用例（H2）；AC-13→方言 SPI 扩展机制与未支持值报错用例。
 
 ### 12.3 构建与 CI 前置
 
@@ -787,6 +812,9 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 | FR-7 执行入口与参数                | §5.1、§9.1                   |
 | §8 规则集                     | §5.7 内置规则表                  |
 | §9 配置 / §9.1 元数据           | §5.2、§5.3、§9.2、§9.3        |
+| FR-8 数据库元数据加载             | §5.3、§9.3、§10、§13.1（D24/D26/D27） |
+| FR-9 多数据库与多方言              | §5.6、§7（SqlDialect）、§9.1、§14（D25） |
+| AC-12 / AC-13                 | §12.1、§12.2 |
 | §10 输入输出 / §10.2 JSON      | §9.4、§6                     |
 | NFR（性能/兼容/维护/测试/错误/依赖）      | §11、§3.5、§10               |
 | §14 AC-1~AC-11             | §12.2、§12.1                  |
@@ -809,7 +837,7 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 | D8  | 决策（已确认） | M8 的 `${}` 扫描范围为语句原文，**包含被丢弃分支**                                                            | §8.5        |
 | D10 | 决策（已确认） | **移除保守策略开关**（原 `conservative_if_always_false`）：保守策略固定启用、不可关闭；`<if>` 一律视为 FALSE                          | §5.2、§8.2、§9.2 |
 | D11 | 决策   | Lambda 还原不完整（wrapper 外部传入/条件在别处构造）→ 不跳过，按"可能缺失条件"分析并标记 `uncertain`                                | §5.5.4、§8.3 |
-| D12 | 决策（已确认） | 表元数据为必需输入：文件缺失（无论显式指定或默认路径）或格式错误 → exit 2                                                  | §5.3        |
+| D12 | 决策（已确认；v1.8 由 D24 修订） | 表元数据为必需输入：~~文件缺失（无论显式指定或默认路径）或格式错误~~ → exit 2；v1.8 起语义为**元数据加载失败（驱动/连接/权限/超时）→ exit 2** | §5.3        |
 | D13 | 决策   | Lambda 实体无法解析出表名 → 表名占位 `?`，非元数据类规则照常判定；元数据类规则按"未知表=无索引"保守命中                                     | §5.5.4、§8.7 |
 | D14 | 决策   | 并行执行 + 稳定排序 + 注入 Clock，保证报告确定性与可测性                                                              | §4.4        |
 | D15 | 决策   | rename 按"删除+新增"处理（新增侧照常分析）                                                                     | §4.3        |
@@ -821,10 +849,14 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 | D21 | 决策（已确认） | **工作区未提交更改不参与 diff**：DIFF 模式两端均为提交树（old=prod commit，new=head commit）；不提供工作区 diff 模式          | §4.3        |
 | D22 | 决策（已确认） | **FULL 模式数据源为提交树**：缺省取当前 HEAD（可由 `--head-commit` 指定），遍历该提交树的全部承载文件，不读取工作区未提交内容        | §4.3、§5.4   |
 | D23 | 决策（已确认） | 普通 `QueryWrapper`（字符串列名）与 `BaseMapper` 内置方法**不纳入** v1 扫描范围（维持需求 FR-2 界定），写入 §15 已知限制 | §5.5.4、§15.1 |
+| D24 | 决策（已确认，2026-10-15） | **元数据来源改为数据库运行时加载**（JDBC `DatabaseMetaData`，一次快照、连接即关）；文件元数据通道（`JsonMetadataProvider`/`--metadata`/`metadata_file`）**彻底移除**；加载失败 → exit 2 | §5.3、§9.3、§10 |
+| D25 | 决策（已确认，2026-10-15） | **方言 SPI `SqlDialect`**（方言名 + Druid DbType + 分页识别）；v1 实现 MySQL，Oracle/PostgreSQL 预留；配置未实现方言值 → **报错 exit 2**（不静默降级）；`dialect` 为配置/CLI 键 | §5.6、§7、§9.1 |
+| D26 | 决策（已确认，2026-10-15） | 连接配置三通道：yaml `datasource` 段 + CLI 覆盖 + 环境变量；**密码优先级 CLI > `SQL_RISK_DB_PASSWORD` > yaml** | §5.1、§9.2 |
+| D27 | 决策（已确认，2026-10-15） | JDBC 驱动**直接在 pom 中引用**（MySQL Connector/J，compile scope → 随 shaded jar 分发），无外置驱动目录机制；后续方言驱动在实现时加入 pom；测试元数据载体用 **H2 内存库**（test scope） | §3.5、§5.3、§12 |
 
-**需求文档中未明确、本设计已补齐的能力**：`<include refid>` 解析与片段派生变更（§8.2、§8.1）、`<script>` 注解与 mapper.xml 同管道（§5.5.3）、静态常量与 Provider 方法的静态求值（§5.5.3）、XXE 加固与离线 DTD 兜底（§5.5.2）。
+**需求文档中未明确、本设计已补齐的能力**：`<include refid>` 解析与片段派生变更（§8.2、§8.1）、`<script>` 注解与 mapper.xml 同管道（§5.5.3）、静态常量与 Provider 方法的静态求值（§5.5.3）、XXE 加固与离线 DTD 兜底（§5.5.2）、元数据一次加载的连接生命周期管理（§5.3）。
 
-**待确认事项**：无——以上决策均已由需求方确认，设计可进入详细设计与编码阶段。
+**待确认事项**：无——D24~D27 方向已于 2026-10-15 确认（D27 按"驱动直接在 pom 中引用"定稿），细则以本文为准。
 
 ***
 
@@ -837,18 +869,20 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 3. 方法外部传入的 wrapper、跨文件的条件拼装无法完整还原（已降级为 `uncertain`，见 D11）。
 4. 差异行映射为启发式（§8.1），极端多 hunk 场景可能把未变更语句判为 MODIFIED（保守方向，可接受）。
 5. 元数据缺失即"无索引"的语义会显著放大 M1 报警量（需求既定策略，非缺陷）。
+6. 元数据加载要求运行期能连通数据库且具备系统表读取权限（FR-8 既定策略）；连接过程新增运行期外部依赖（数据库可达性）。
+7. v1 仅实现 MySQL 方言；Oracle/PostgreSQL 的方言实现（含分页子句识别）未提供，配置未实现值将直接报错（FR-9 预留，非缺陷）。
 
 ### 15.2 演进路径（预留接口已就位）
 
 | 演进项                          | 落点                                             |
 | ---------------------------- | ---------------------------------------------- |
 | 线上运行版本 commit 自动获取           | 实现 `ProductionCommitProvider`，主流程零改动            |
-| 表结构/索引元数据自动获取（连库或数据字典）       | 实现 `MetadataProvider`，规则零改动                    |
+| 表结构/索引元数据自动获取（连库或数据字典）       | ✅ 已纳入 v1.8（D24，JDBC 一次加载）；数据字典等其它来源经 `MetadataProvider` SPI 扩展 |
+| Oracle / PostgreSQL 方言支持     | 实现 `SqlDialect`（含分页识别）+ 注册 + 用例，核心与规则零改动（D25）     |
 | 执行计划分析（EXPLAIN）              | `ExecutionPlanAnalyzer` 占位接口 + P6 后插入新阶段        |
 | CI/CD 门禁与评审平台集成              | 退出码（0/1/2）已可编程判断；报告 JSON 为稳定契约                 |
 | 团队自定义规则                      | `ServiceLoader<RuleProvider>` 扩展点，不动核心流程       |
-| 多语言/其他数据库                   | 承载形态提取与 Druid DbType 参数化，本版锁定 MySQL             |
 
 ***
 
-*文档完。v1.7 按需求方评审意见修订：确认 XML 解析采用 JDK SAX + Locator（D3）。全部决策已确认，无待确认事项，设计可进入详细设计与编码阶段。*
+*文档完。v1.8 按需求方扩展要求修订：元数据来源改为数据库运行时加载、文件通道移除（D24），新增 `SqlDialect` 方言 SPI 及 MySQL 基线/多方言预留（D25），连接配置三通道与密码优先级（D26），驱动**直接在 pom 中引用**（随 shaded jar）与 H2 测试载体（D27 已确认）。全部决策已确认；详细设计同步更新（v1.8，含 M10/M11 实现回写）。*

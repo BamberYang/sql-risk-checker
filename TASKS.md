@@ -18,8 +18,11 @@
 | M7  | rule（引擎 + 12 条内置规则）             | M  | M6                  | ac03/ac11          |
 | M8  | report + 汇总（白名单/口径/输出）          | M  | M7                  | ac07/ac08          |
 | M9  | 端到端黄金用例与收尾                      | M  | M8                  | ac01~ac11 全绿       |
+| M10 | 数据库元数据（JDBC 接入，FR-8）           | M  | M9/交付后增补           | 元数据加载测试（H2）全绿；文件元数据通道零残留 |
+| M11 | 方言 SPI（MySQL 基线 + 扩展机制，FR-9）    | S  | M10                 | SqlDialectsTest；解析行为零变化 |
+| M12 | 测试夹具迁移与回归（H2）                    | M  | M11                 | 黄金用例全绿；ac09 新错误形态 |
 
-依赖链：`M0 → M1 → {M2, M3, M4}`；`M4 → M5 → M6 → M7 → M8 → M9`。M2 与 M3/M4 可并行；M5、M6、M7 各自内部子任务按序推进。
+依赖链：`M0 → M1 → {M2, M3, M4}`；`M4 → M5 → M6 → M7 → M8 → M9 → 交付后增补 → M10 → M11 → M12`。M2 与 M3/M4 可并行；M5、M6、M7 各自内部子任务按序推进；**M10~M12 为扩展需求（FR-8/FR-9，详设 v1.8）实现串行链**，门禁沿用：每里程碑完成测试并经需求方确认后进入下一阶段。
 
 ***
 
@@ -119,6 +122,33 @@
 - [x] **T9.5**（2026-10-14）收尾：偏差回写（详设 v1.2：§8.3 `Set<Integer>`、§6 ConfigLoader 签名、§9.1 SPI 形态、§9.4/§9.5/D19 补充、§12.3 sql 三态、§18.1 12→13、§18.2 夹具确定性）；README（用法/参数/退出码/规则表）与 JOURNAL 更新；全量 `mvn -o clean verify` **263/263 全绿**
 - **过程中修复 2 个真实缺陷**：① 裸 `<if>WHERE …</if>` 折叠未归 `CONDITION`，H1/H2/H3 保守附注在该常见形态缺失（ac03 暴露；含 `DynNode.innerText()` 角色推断修正）；② JGit `PersonIdent(PersonIdent)` 拷贝构造器重置提交时间，夹具 SHA 跨 JVM 不稳定（黄金比对暴露；改复用固定实例）
 
+## M10 数据库元数据（JDBC 接入，FR-8）✅ 2026-10-15（需求方已确认；真实 MySQL 连库验证延至 M12）
+
+- [x] **T10.1**（2026-10-15）config/CLI 改造：`DataSourceSetting` + `AppConfig`（去 `metadataFile`，加 `datasource`/`dialect`）；`CliArgs` 增 `--dialect/--db-url/--db-username/--db-password`、移除 `--metadata`；`ConfigLoader` CLI 覆盖 + 密码三级优先级（CLI > `SQL_RISK_DB_PASSWORD` > yaml）+ `metadata_file` 已移除键告警 + 校验（url 必填、`jdbc:` 前缀）→ 详设 §5/§6
+- [x] **T10.2**（2026-10-15）元数据加载：pom 引入 MySQL Connector/J（compile）；`JdbcMetadataProvider`（一次连接加载：`getTables/getColumns/getIndexInfo`、类型归一化、索引列序、连接即关、失败 → `MetadataException` exit 2）→ 详设 §7；删除 `JsonMetadataProvider` 与 `examples/sql-risk-metadata.example.json`
+- [x] **T10.3**（2026-10-15）接线与入口：P1 换 JDBC 加载、`DEBUG_DEFAULT_ARGV` 改连接参数、错误信息脱敏（不含密码）→ 详设 §13.2/§5
+- [x] **T10.4**（2026-10-15）黄金夹具迁移与错误形态更新（M，**原 T12.1/T12.2 并入**：M10 删除 `JsonMetadataProvider` 后，用例 `metadata.json` 依赖必须同步迁移）：14 用例 `metadata.json` → `schema.sql`（H2 内存库建 schema → `JdbcMetadataProvider` 加载）；`GoldenCase`/`AnalysisEngineIT` 管线更新；expected 应零漂移（逐条人工复核）；ac09 的"元数据缺失/格式错误"改为"连接失败（非法 url）/datasource.url 缺失/方言未支持"
+- 验收（2026-10-15 实测）：`JdbcMetadataProviderTest` 6 用例（H2：类型归一 VARCHAR/INT 别名、索引列序、快照独立于连接关闭、失败 exit 2）；Config/CliArgs/Engine/Main 测试全部按新语义更新；**14 个黄金用例 expected 零漂移**（H2 元数据与旧 JSON 语义等价验证）；**306/306 全绿**；离线 `mvn -o clean verify` 通过（在线校准一次：MySQL Connector/J 8.0.33 + H2 2.2.224 后恢复离线）；shaded jar 21.2MB（含驱动）
+  - 说明：`--metadata`/`metadata_file`/`JsonMetadataProvider`/`examples/sql-risk-metadata.example.json` 全部移除（`metadata_file` 出现时告警忽略）；ac09 错误形态改为"连接失败（未知驱动）/datasource.url 未配置/方言未支持"
+  - 注：真实 MySQL 连库验证需需求方提供连接信息（安排在 M12 回归时统一执行）
+
+## M11 方言 SPI（MySQL 基线 + 扩展机制，FR-9）✅ 2026-10-15（需求方已确认）
+
+- [x] **T11.1**（2026-10-15）方言抽象：`SqlDialect`/`SqlDialects`/`MysqlDialect`（`hasRowLimit` 现行为迁入）；`DruidSqlParser.parse(sql, dialect)`、`QueryFactsBuilder` 的 `hasLimit` 走方言 → 详设 §10.4/§10.5/§10.7
+- [x] **T11.2**（2026-10-15）配置放开与扩展机制验证：`dialect` ∈ `supportedNames()`；未支持值（`oracle`/`postgresql`）→ 明确报错 exit 2（不降级）；以测试替身方言验证"实现 SPI → 注册 → 可用"的扩展路径 → 详设 §6/§10.7
+- 验收（2026-10-15 实测）：`SqlDialectsTest` 6 用例（内置+ServiceLoader 注册、字典序确定性、大小写不敏感取值、未支持报错、MySQL 分页正反例、**替身方言端到端**——PG 形态 `FETCH FIRST` 解析→hasLimit 事实→配置校验放开）；**312/312 全绿、黄金用例 expected 零漂移**（MySQL 行为零变化）
+  - 扩展路径（契约）：实现 `SqlDialect` → `META-INF/services` 注册 → 配置 `dialect: <name>` 即可用；未实现值报错不降级
+  - 回写清单（M12）：概设 §3.3 依赖图新增 `config → parser`（方言取值校验经 `SqlDialects.supportedNames()`）
+
+## M12 端到端回归与收尾 ✅ 2026-10-15（需求方已确认；T12.1 真实 MySQL 验证按需求方决定暂缓，连接信息后补可随时执行）
+
+- [ ] **T12.1** 真实 MySQL 连库验证（暂缓：需求方在 M10 确认时明确"mysql 连接先不验证"；连接信息后补可随时执行，属可选验收）
+- [x] **T12.2**（2026-10-15）文档回写：README（CLI 参数、yaml datasource 示例、示例文件删除）、CLAUDE.md（模块约束/元数据来源）、JOURNAL、详设偏差回写（如有）
+- [x] **T12.3**（2026-10-15）全量回归：`mvn -o clean verify` 全绿；确定性复验（两轮独立 JVM）
+- 验收（2026-10-15 实测）：**312/312 全绿**（离线 `mvn -o clean verify`）；**确定性复验**（`AnalysisEngineIT` 两轮独立 JVM 全绿）；**CLI 端到端冒烟**（shaded jar + 外部 H2 classpath 走真实命令：`[元数据] … 加载 0 张表（一次加载，连接已关闭）`（AC-12）+ DIFF 命中 H2 高危 + JSON/HTML 双报告）；文档回写完成——README（datasource 示例/CLI 表/状态）、CLAUDE.md（依赖图/SPI/技术栈）、概设 §3.3（`config → parser` 边）、详设 v1.8 实现回写（类型别名归一/环境变量重载/ParseContext 方言装配）
+
+***
+
 ## 交付后增补（post-M9，需求方驱动）
 
 - [x] 2026-10-14 入口调试便利：argv 为空 → `DEBUG_DEFAULT_ARGV`（IDE 直跑 main 可调试），stderr 打印 `[调试]` 提示 → 详设 §5
@@ -129,6 +159,7 @@
 - [x] 2026-10-15 元数据示例：按真实 DDL（union-order-app `init.sql`，PolarDB/PostgreSQL）生成 `examples/sql-risk-metadata.example.json`（9 张表，含 ALTER 追加列合并、唯一/复合索引），经工具实际加载验证并加守卫测试（301 用例全绿）；README 引用
 - [x] 2026-10-15 空骨架归口 SKIP：解析产物为空（含 `${}` 解析失败的短路候选）且语句级短路未命中 → 从 `level=null` 结果改归 SKIP（PARSE_FAILED，"无可用 SQL 骨架"）；短路命中语义不变（AC-11）；`RuleEngine.run` 返回 `Outcome{results, skipped}`；ac12 增第三形态；302 用例全绿 → 详设 v1.6（§11.2-④）
 - [x] 2026-10-15 HTML 报告文案与统计：分区/徽标「未命中风险规则·无命中」更名为「**通过**」，头部统计新增「通过」卡片（= total − 高 − 中 − 低）与恒等式行口径同步；JSON 契约不变；302 用例全绿 → 详设 v1.7（§12.5）
+- [x] 2026-10-15 扩展实现（FR-8/FR-9）**交付完毕**：设计定稿（需求 v1.1、概要 v1.8、详设 v1.8 含实现回写）；**M10 数据库元数据 / M11 方言 SPI / M12 回归与收尾 均已确认**（真实 MySQL 验证为唯一暂缓项）；312 用例全绿
 
 ## 预研风险清单（M0.3 提前处理，结论回写本节）
 

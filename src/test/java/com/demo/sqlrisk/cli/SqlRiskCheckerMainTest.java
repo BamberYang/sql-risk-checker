@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** T2.3~T4 自测：入口装配、退出码、ac09 错误分支（CLI 侧：参数/配置/元数据/仓库/commit）。 */
+/** T2.3~T10 自测：入口装配、退出码、ac09 错误分支（CLI 侧：参数/配置/数据库元数据/仓库/commit）。 */
 class SqlRiskCheckerMainTest {
 
     @TempDir
@@ -29,6 +29,7 @@ class SqlRiskCheckerMainTest {
     private PrintStream out;
     private PrintStream err;
     private FixtureRepo fixture;
+    private Path dbConfig;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -44,12 +45,25 @@ class SqlRiskCheckerMainTest {
                 .commit("head", Collections.singletonMap("mapper/A.xml",
                         "<mapper namespace=\"m\"><select id=\"s\">SELECT v2</select></mapper>"))
                 .finish();
-        Files.write(repoDir.resolve("sql-risk-metadata.json"),
-                "{\"version\":\"1.0\",\"tables\":[]}".getBytes(StandardCharsets.UTF_8));
+        // v1.8/FR-8：元数据来源为数据库——显式配置指向 H2 空库（语义等价旧"空元数据"）
+        dbConfig = tempDir.resolve("db.yaml");
+        Files.write(dbConfig, ("datasource:\n"
+                + "  url: \"jdbc:h2:mem:main-test;DB_CLOSE_DELAY=-1\"\n"
+                + "  username: sa\n"
+                + "  password: \"\"\n").getBytes(StandardCharsets.UTF_8));
     }
 
     private int run(String... argv) {
         return SqlRiskCheckerMain.run(argv, out, err, TestClocks.fixed());
+    }
+
+    /** 业务用例：附加数据库配置文件（缺省元数据来源为必需输入）。 */
+    private String[] withDb(String... argv) {
+        String[] merged = new String[argv.length + 2];
+        System.arraycopy(argv, 0, merged, 0, argv.length);
+        merged[argv.length] = "--config";
+        merged[argv.length + 1] = dbConfig.toString();
+        return merged;
     }
 
     @Test
@@ -90,7 +104,8 @@ class SqlRiskCheckerMainTest {
     @Test
     void full_mode_runs_and_exits_0() throws Exception {
         Path outDir = tempDir.resolve("out-full");
-        assertEquals(ExitCode.OK, run("--repo", fixture.path().toString(), "--output", outDir.toString()));
+        assertEquals(ExitCode.OK, run(withDb("--repo", fixture.path().toString(),
+                "--output", outDir.toString())));
         assertTrue(outText().contains("mode=FULL"), "未传 --prod-commit 应为 FULL 模式");
         assertTrue(outText().contains("head=" + abbrev(fixture.sha("head"))), "报告展示解析后的 commit");
         assertTrue(outText().contains("高危 0"));
@@ -114,8 +129,8 @@ class SqlRiskCheckerMainTest {
 
     @Test
     void diff_mode_reported_when_prod_commit_given() {
-        assertEquals(ExitCode.OK, run("--repo", fixture.path().toString(),
-                "--prod-commit", fixture.sha("prod"), "--output", tempDir.resolve("out-diff").toString()));
+        assertEquals(ExitCode.OK, run(withDb("--repo", fixture.path().toString(),
+                "--prod-commit", fixture.sha("prod"), "--output", tempDir.resolve("out-diff").toString())));
         assertTrue(outText().contains("mode=DIFF"));
         assertTrue(outText().contains("prod=" + abbrev(fixture.sha("prod"))));
     }
@@ -124,7 +139,9 @@ class SqlRiskCheckerMainTest {
     void whitelist_hit_is_counted_as_ignored_end_to_end() throws Exception {
         // ac07 口径：白名单命中语句不参与分析，进入 ignored[]，不影响退出码
         Path cfg = tempDir.resolve("whitelist.yaml");
-        Files.write(cfg, "whitelist:\n  statements:\n    - m.s\n".getBytes(StandardCharsets.UTF_8));
+        Files.write(cfg, ("whitelist:\n  statements:\n    - m.s\n"
+                + "datasource:\n  url: \"jdbc:h2:mem:main-test;DB_CLOSE_DELAY=-1\"\n  username: sa\n")
+                .getBytes(StandardCharsets.UTF_8));
         Path outDir = tempDir.resolve("out-whitelist");
         assertEquals(ExitCode.OK, run("--repo", fixture.path().toString(),
                 "--config", cfg.toString(), "--output", outDir.toString()));
@@ -141,16 +158,16 @@ class SqlRiskCheckerMainTest {
     void unwritable_output_dir_exits_2() throws Exception {
         Path blocker = tempDir.resolve("blocker");
         Files.write(blocker, "not a dir".getBytes(StandardCharsets.UTF_8));
-        assertEquals(ExitCode.USAGE_ENV_ERROR, run("--repo", fixture.path().toString(),
-                "--output", blocker.toString()));
+        assertEquals(ExitCode.USAGE_ENV_ERROR, run(withDb("--repo", fixture.path().toString(),
+                "--output", blocker.toString())));
         assertTrue(errText().contains("报告写出失败"), "stderr: " + errText());
     }
 
     @Test
-    void missing_metadata_exits_2() throws Exception {
-        Files.delete(fixture.path().resolve("sql-risk-metadata.json"));
+    void missing_datasource_url_exits_2() {
+        // v1.8/FR-8：datasource.url 为必需项（默认配置为空 → 配置校验失败 exit 2）
         assertEquals(ExitCode.USAGE_ENV_ERROR, run("--repo", fixture.path().toString()));
-        assertTrue(errText().contains("元数据文件不存在"));
+        assertTrue(errText().contains("datasource.url"), "stderr: " + errText());
     }
 
     @Test
@@ -163,16 +180,14 @@ class SqlRiskCheckerMainTest {
     @Test
     void non_git_repo_exits_2() throws Exception {
         Path plain = Files.createDirectories(tempDir.resolve("plain"));
-        Files.write(plain.resolve("sql-risk-metadata.json"),
-                "{\"version\":\"1.0\",\"tables\":[]}".getBytes(StandardCharsets.UTF_8));
-        assertEquals(ExitCode.USAGE_ENV_ERROR, run("--repo", plain.toString()));
+        assertEquals(ExitCode.USAGE_ENV_ERROR, run(withDb("--repo", plain.toString())));
         assertTrue(errText().contains("非 git 仓库"));
     }
 
     @Test
     void invalid_prod_commit_exits_2() {
-        assertEquals(ExitCode.USAGE_ENV_ERROR, run("--repo", fixture.path().toString(),
-                "--prod-commit", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"));
+        assertEquals(ExitCode.USAGE_ENV_ERROR, run(withDb("--repo", fixture.path().toString(),
+                "--prod-commit", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")));
         assertTrue(errText().contains("不存在"), "stderr: " + errText());
     }
 
@@ -182,9 +197,9 @@ class SqlRiskCheckerMainTest {
         PrintStream originalErr = System.err;
         System.setErr(err); // 引擎提取日志走 System.err（进度日志，stderr 契约）
         try {
-            assertEquals(ExitCode.OK, run("--repo", fixture.path().toString(),
+            assertEquals(ExitCode.OK, run(withDb("--repo", fixture.path().toString(),
                     "--prod-commit", fixture.sha("prod"), "--verbose",
-                    "--output", tempDir.resolve("out-verbose").toString()));
+                    "--output", tempDir.resolve("out-verbose").toString())));
         } finally {
             System.setErr(originalErr);
         }

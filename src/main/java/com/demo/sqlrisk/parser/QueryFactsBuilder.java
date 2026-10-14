@@ -44,7 +44,8 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 
 /**
- * 语句事实提取（详细设计 §10.5，DD-10）：自定义 AST 遍历（不依赖 SchemaStatVisitor，行为可控可测）。
+ * 语句事实提取（详细设计 §10.5，DD-10；v1.8 方言化）：自定义 AST 遍历（不依赖 SchemaStatVisitor，行为可控可测）；
+ * {@code hasLimit} 由 {@link SqlDialect#hasRowLimit} 提供（缺省 MySQL，行为与迁移前一致）。
  *
  * <p>限制（保守方向已注明）：UNION 等无单一 queryBlock 的查询简化为"有过滤 + uncertain"；
  * 子查询（IN/EXISTS/派生表）内容隔离，不参与本语句事实。</p>
@@ -60,7 +61,13 @@ public final class QueryFactsBuilder {
     }
 
     public static QueryFacts build(SQLStatement ast, MetadataProvider metadata, SqlSkeleton skeleton) {
-        Builder b = new Builder(metadata);
+        return build(ast, metadata, skeleton, null);
+    }
+
+    /** @param dialect 可为 null（缺省 MySQL 方言）；分页事实（hasLimit）由方言识别 */
+    public static QueryFacts build(SQLStatement ast, MetadataProvider metadata, SqlSkeleton skeleton,
+                                   SqlDialect dialect) {
+        Builder b = new Builder(metadata, dialect == null ? new MysqlDialect() : dialect);
         if (ast instanceof SQLSelectStatement) {
             buildSelect((SQLSelectStatement) ast, b);
         } else if (ast instanceof SQLUpdateStatement) {
@@ -71,7 +78,7 @@ public final class QueryFactsBuilder {
             if (update.getWhere() != null) {
                 walkCondition(update.getWhere(), b);
             }
-            b.hasLimit = hasMysqlLimit(ast);
+            b.hasLimit = b.dialect.hasRowLimit(ast);
         } else if (ast instanceof SQLDeleteStatement) {
             SQLDeleteStatement delete = (SQLDeleteStatement) ast;
             b.kind = QueryFacts.StatementKind.DELETE;
@@ -80,7 +87,7 @@ public final class QueryFactsBuilder {
             if (delete.getWhere() != null) {
                 walkCondition(delete.getWhere(), b);
             }
-            b.hasLimit = hasMysqlLimit(ast);
+            b.hasLimit = b.dialect.hasRowLimit(ast);
         } else if (ast instanceof SQLInsertStatement) {
             b.kind = QueryFacts.StatementKind.INSERT;
             collectTableSource(((SQLInsertStatement) ast).getTableSource(), b);
@@ -114,7 +121,7 @@ public final class QueryFactsBuilder {
         if (block.getWhere() != null) {
             walkCondition(block.getWhere(), b);
         }
-        b.hasLimit = block.getLimit() != null;
+        b.hasLimit = block.getLimit() != null || b.dialect.hasRowLimit(select);
     }
 
     private static boolean hasSelectAll(SQLSelectQueryBlock block) {
@@ -453,22 +460,12 @@ public final class QueryFactsBuilder {
         return false;
     }
 
-    // ---------- LIMIT（MySQL 方言，反射调用：M0.3 spike 已验证可达） ----------
-
-    private static boolean hasMysqlLimit(SQLStatement statement) {
-        try {
-            Object limit = statement.getClass().getMethod("getLimit").invoke(statement);
-            return limit != null;
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
     // ---------- Builder ----------
 
     static final class Builder {
 
         final MetadataProvider metadata; // nullable
+        final SqlDialect dialect;        // 分页事实识别（v1.8）
         QueryFacts.StatementKind kind = QueryFacts.StatementKind.OTHER;
         boolean hasWhere;
         boolean hasLimit;
@@ -488,8 +485,9 @@ public final class QueryFactsBuilder {
         List<DroppedBranch> droppedBranches = Collections.emptyList();
         boolean uncertain;
 
-        Builder(MetadataProvider metadata) {
+        Builder(MetadataProvider metadata, SqlDialect dialect) {
             this.metadata = metadata;
+            this.dialect = dialect;
         }
 
         void finalizeCrossTableLink() {

@@ -14,17 +14,20 @@ import java.util.Optional;
 public final class AppConfig {
 
     private final Map<String, RuleSetting> ruleSettings; // ruleId → 生效设置（含默认值）
-    private final String metadataFile;                   // 绝对路径
+    private final DataSourceSetting datasource;          // v1.8：数据库连接（元数据来源，FR-8）
+    private final String dialect;                        // v1.8：SQL 方言（已校验为已支持值）
     private final List<String> lowRiskKeywords;          // L1 关键字表
     private final List<String> whitelistStatements;      // 已校验的模式串
 
     public AppConfig(Map<String, RuleSetting> ruleSettings,
-                     String metadataFile,
+                     DataSourceSetting datasource,
+                     String dialect,
                      List<String> lowRiskKeywords,
                      List<String> whitelistStatements) {
         this.ruleSettings = Collections.unmodifiableMap(
                 new LinkedHashMap<String, RuleSetting>(Objects.requireNonNull(ruleSettings, "ruleSettings")));
-        this.metadataFile = Objects.requireNonNull(metadataFile, "metadataFile");
+        this.datasource = Objects.requireNonNull(datasource, "datasource");
+        this.dialect = Objects.requireNonNull(dialect, "dialect");
         this.lowRiskKeywords = Collections.unmodifiableList(
                 new ArrayList<String>(Objects.requireNonNull(lowRiskKeywords, "lowRiskKeywords")));
         this.whitelistStatements = Collections.unmodifiableList(
@@ -39,9 +42,14 @@ public final class AppConfig {
         return Optional.ofNullable(ruleSettings.get(ruleId));
     }
 
-    /** 表元数据 JSON 绝对路径（必需输入，加载失败 → exit 2）。 */
-    public String metadataFile() {
-        return metadataFile;
+    /** 数据库连接（元数据来源；v1.8/D24）。 */
+    public DataSourceSetting datasource() {
+        return datasource;
+    }
+
+    /** SQL 方言名（v1.8/D25；v1 仅 mysql）。 */
+    public String dialect() {
+        return dialect;
     }
 
     public List<String> lowRiskKeywords() {

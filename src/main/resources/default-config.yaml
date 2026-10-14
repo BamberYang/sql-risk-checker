@@ -1,7 +1,7 @@
 # SQL 上线风险静态检查工具 —— 内置默认配置
-# 合并规则：本文件 < 用户配置（--config，同 ruleId/键覆盖）< CLI 参数（--metadata 覆盖 metadata_file）。
+# 合并规则：本文件 < 用户配置（--config，同 ruleId/键覆盖）< CLI 参数（--db-url/--db-username/--db-password/--dialect）。
 # 注意：保守策略固定启用、不可关闭，无对应配置开关。
-# 已移除配置项（出现时告警忽略）：bulk_operation_threshold、conservative_if_always_false。
+# 已移除配置项（出现时告警忽略）：bulk_operation_threshold、conservative_if_always_false、metadata_file。
 
 # 规则级别与开关（内置默认；ruleId 属于规则集 H1~H3 / M1~M6、M8 / L1、L2、L4）
 rules:
@@ -45,9 +45,17 @@ rules:
     level: LOW
     enabled: true
 
-# 表元数据 JSON 路径：相对本文件所在目录解析（内置默认以【仓库根】为基准）。
-# 元数据为必需输入：文件缺失或格式错误将报错退出（exit 2）。
-metadata_file: sql-risk-metadata.json
+# 数据库连接（元数据来源，FR-8）：启动时经 JDBC 读取一次、只读、加载后即关闭。
+# 密码优先级：--db-password > 环境变量 SQL_RISK_DB_PASSWORD > 本键（建议用前两者，避免明文落盘）。
+# datasource.url 为必需项：未配置将报错退出（exit 2）。
+datasource:
+  url: ""                          # 必填，如 jdbc:mysql://127.0.0.1:3306/union_order
+  username: ""
+  password: ""
+  connection_timeout_seconds: 10
+
+# SQL 方言（v1.8/D25）：v1 仅支持 mysql；oracle/postgresql 为预留值，配置将报错。
+dialect: mysql
 
 # 低危不推荐写法关键字表（L1 规则；大小写不敏感、空白折叠后匹配）
 low_risk_keywords:

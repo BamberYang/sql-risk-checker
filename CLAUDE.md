@@ -14,7 +14,7 @@ SQL 上线风险静态检查工具：Java 8 CLI，基于 Git diff 仅提取本�
 | 概要设计 | v1.7 | 架构、模块、决策 D1~D23（均已确认）                                 |
 | 详细设计 | v1.2 | 编码直接依据：类结构、方法签名、算法伪码、规则详设、测试用例（DD-1~DD-12）             |
 
-实现已完成（M0~M9；263 用例全绿）。改动前先读详细设计对应章节，并保持文档与代码同步（实现偏差 → 回写文档，见详设 v1.2 变更记录）。
+实现已完成（M0~M9 + 扩展 M10 数据库元数据 / M11 方言 SPI；312 用例全绿）。改动前先读详细设计对应章节，并保持文档与代码同步（实现偏差 → 回写文档，见详设版本变更记录与 v1.8 实现回写）。
 
 ## 常用命令
 
@@ -40,13 +40,13 @@ java -jar target/sql-risk-checker-shaded.jar --repo <path> --prod-commit <sha> -
 - **规则集固定**：H1~H3、M1~M6、M8、L1/L2/L4；L3、M7 编号保留不复用。M8 为语句级短路规则（扫语句**原文**，含被丢弃分支，优先级 -100 先行），**排除根名解析到 Wrapper 参数的 `${…}`**（如 `${ew.customSqlSegment}`，详设 §9.5-6/§10.6）；**空骨架（含 `${}` 解析失败）未命中短路规则 → SKIP**（不输出为无风险结果，§11.2-④ v1.6）。规则优先级/短路标记硬编码，仅 level/enabled 可配置。
 - **范围边界**：普通 QueryWrapper（字符串列名链式）与 BaseMapper 内置方法不解析（D23）；链式方法表中未收录的方法 → 忽略该条件并标 `hasUnknownFragment`，不猜测语义（DD-8）。
 - **报告契约**：需求 §10.2 字段 + 追加字段（mode/source/uncertain/changedVia/skeleton、changeType:FULL，D5 已确认）；口径：total=results.length，提取总数=total+skip+ignored。`--output` 默认双产出：JSON 为机器契约（黄金样例基准），HTML 为阅读层（§12.5，不参与黄金比对）。
-- **元数据为必需输入**：缺失（含默认路径仓库根 `sql-risk-metadata.json`）或格式错误 → exit 2；表不在元数据中 = 无索引（M1 保守命中）。
+- **元数据为必需输入（v1.8 起来源为数据库）**：启动时经 JDBC **一次加载**（只读、加载后连接即关；连接失败/权限不足/超时 → exit 2）；表不在加载结果中 = 无索引（M1 保守命中）。连接配置：yaml `datasource` 段 + CLI（`--db-url/--db-username/--db-password`）+ 环境变量 `SQL_RISK_DB_PASSWORD`（密码优先级 CLI > 环境变量 > yaml）。
 
-模块依赖硬约束（概要设计 §3.3）：`cli → core → 其余`；`rule` 不得依赖 `diff`/`extractor`（规则只读 QueryFacts + 上下文）；`model` 零依赖。跨模块 SPI：`ProductionCommitProvider`（diff）、`MetadataProvider`（metadata）、`RuleProvider`（rule，ServiceLoader 扩展）。
+模块依赖硬约束（概要设计 §3.3）：`cli → core → 其余`；`rule` 不得依赖 `diff`/`extractor`（规则只读 QueryFacts + 上下文）；`model` 零依赖；`config → metadata`、`config → parser`（方言取值校验经 `SqlDialects.supportedNames()`）。跨模块 SPI：`ProductionCommitProvider`（diff）、`MetadataProvider`（metadata）、`RuleProvider`（rule，ServiceLoader）、`SqlDialect`（parser，ServiceLoader 方言扩展）。
 
 ## 技术栈（版本已锁定，概要设计 §3.5）
 
-Java 8 · JGit 5.13.x（6.x 需 Java 11）· Druid 1.2.x · SnakeYAML 1.33 · JavaParser 3.25.x · Gson 2.10.1 · mybatis-plus-core 3.5.7 · slf4j-nop · JUnit 5.10。XML 解析用 JDK SAX + Locator（不用 dom4j，决策 D3）。
+Java 8 · JGit 5.13.x（6.x 需 Java 11）· Druid 1.2.x · SnakeYAML 1.33 · JavaParser 3.25.x · Gson 2.10.1 · mybatis-plus-core 3.5.7 · slf4j-nop · JUnit 5.10 · MySQL Connector/J 8.0.33（JDBC 驱动，随 shaded jar）· H2 2.2.224（test scope，元数据/黄金用例夹具）。XML 解析用 JDK SAX + Locator（不用 dom4j，决策 D3）。
 
 ## 测试约定
 

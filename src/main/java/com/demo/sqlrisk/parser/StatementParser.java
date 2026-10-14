@@ -26,10 +26,12 @@ public final class StatementParser {
         try {
             List<SqlSkeleton> skeletons = skeletonsOf(statement, ctx);
             List<ParsedSql> parsed = new ArrayList<ParsedSql>(skeletons.size());
+            SqlDialect dialect = ctx == null ? null : ctx.dialect();
             for (SqlSkeleton skeleton : skeletons) {
                 NormalizedSql normalized = PlaceholderNormalizer.normalize(skeleton.text());
-                com.alibaba.druid.sql.ast.SQLStatement ast = DruidSqlParser.parse(normalized.text());
-                QueryFacts facts = QueryFactsBuilder.build(ast, ctx == null ? null : ctx.metadata(), skeleton);
+                com.alibaba.druid.sql.ast.SQLStatement ast = DruidSqlParser.parse(normalized.text(), dialect);
+                QueryFacts facts = QueryFactsBuilder.build(ast, ctx == null ? null : ctx.metadata(),
+                        skeleton, dialect);
                 parsed.add(new ParsedSql(skeleton, normalized, ast, facts));
             }
             return ParseOutcome.ok(new ParsedStatement(statement, parsed));

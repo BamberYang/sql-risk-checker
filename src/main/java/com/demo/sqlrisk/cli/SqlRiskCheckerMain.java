@@ -1,6 +1,7 @@
 package com.demo.sqlrisk.cli;
 
 import com.demo.sqlrisk.config.AppConfig;
+import com.demo.sqlrisk.config.CliOverrides;
 import com.demo.sqlrisk.config.ConfigLoader;
 import com.demo.sqlrisk.core.AnalysisEngine;
 import com.demo.sqlrisk.core.RunContext;
@@ -28,12 +29,14 @@ import java.util.Arrays;
 public final class SqlRiskCheckerMain {
 
     /**
-     * 调试默认参数（仅当 argv 为空时启用）：指向本地验证仓库与占位元数据，报告输出到 /tmp 避免污染工作目录。
-     * 按需修改此处即可改变默认调试目标。
+     * 调试默认参数（仅当 argv 为空时启用）：指向本地验证仓库与本地开发库连接，报告输出到 /tmp。
+     * 密码不写入代码：用环境变量 SQL_RISK_DB_PASSWORD 或临时加 --db-password。
+     * 按需修改此处即可改变默认调试目标（库名以实际为准）。
      */
     static final String[] DEBUG_DEFAULT_ARGV = {
             "--repo", "/Users/loafer/Documents/WorkSpace/union/union-channel-app",
-            "--metadata", "examples/sql-risk-metadata.example.json",
+            "--db-url", "jdbc:mysql://127.0.0.1:3306/union_order",
+            "--db-username", "root",
             //"--prod-commit","a32658d8aef5ca1ee7f2cbc6a0da76190844bb5b",
             //"--head-commit","",
             "--output", "/tmp/sql-risk-debug",
@@ -68,7 +71,8 @@ public final class SqlRiskCheckerMain {
                 return ExitCode.OK;
             }
             verbose = args.verbose();
-            AppConfig config = ConfigLoader.load(args.configPath(), args.metadataPath(), args.repoPath());
+            AppConfig config = ConfigLoader.load(new CliOverrides(args.configPath(), args.dialect(),
+                    args.dbUrl(), args.dbUsername(), args.dbPassword()), args.repoPath());
             RunContext ctx = new RunContext(args.repoPath(), args.headCommit(), args.prodCommit(), config,
                     args.outputDir(), args.verbose(), clock);
             ReportModel report = new AnalysisEngine(clock).execute(ctx);
