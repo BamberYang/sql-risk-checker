@@ -37,6 +37,10 @@ public final class SqlRiskCheckerMain {
             "--repo", "/Users/loafer/Documents/WorkSpace/union/union-order-app",
             //"--prod-commit","a32658d8aef5ca1ee7f2cbc6a0da76190844bb5b",
             //"--head-commit","",
+            //"--db-url","",
+            //"--db-username","",
+            //"--db-password","",
+            //"--dialect","postgresql",
             "--output", "/tmp/sql-risk-debug",
             "--verbose",
     };
