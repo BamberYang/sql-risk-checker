@@ -7,7 +7,7 @@
 | 项    | 内容                                             |
 | ---- | ---------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具详细设计                            |
-| 版本   | v1.10                                          |
+| 版本   | v1.11                                          |
 | 日期   | 2026-10-15                                     |
 | 关联文档 | 需求文档 v1.1（FR-8/FR-9 扩展）；概要设计 v1.8（决策 D1~D27）     |
 | 本文定位 | 编码直接依据：类结构、方法签名、算法伪码、常量阈值、测试类清单；不包含最终源码本身      |
@@ -435,7 +435,7 @@ public final class LambdaBranchRef { int groupId; int pathIndex; }   // pathInde
 public final class LambdaBranchGroup { enum Kind { IF, SWITCH }; int groupId; Kind kind; List<String> pathLabels; }
 ```
 
-**控制流分支识别（M15 增补，需求方驱动）**：wrapper 变量在方法体内的后续调用按祖先控制流语句记录分支坐标（外层→内层）：
+**控制流分支识别（M15 增补，需求驱动）**：wrapper 变量在方法体内的后续调用按祖先控制流语句记录分支坐标（外层→内层）：
 
 | Java 形态                     | 组路径（pathLabels）                                | 语义（对齐 XML）                          |
 | --------------------------- | ---------------------------------------------- | ----------------------------------- |
@@ -730,7 +730,7 @@ run(List<ParsedStatement> statements, RuleEngineDeps deps) -> Outcome{results, s
     //    不再作为 level=null 结果输出（"无法分析" ≠ "已分析且无风险"）
 ```
 
-- **空骨架归口（v1.6，需求方驱动）**：解析阶段对含 `${}` 的失败语句保留空骨架"短路候选"（D8 结构性保证）不变；**短路命中（M8/AC-11）仍按原语义输出 MEDIUM**；未命中的空骨架不再进入 results，改由 `Outcome.skipped` 计入 SKIP（口径同解析失败，不影响退出码）。
+- **空骨架归口（v1.6，需求驱动）**：解析阶段对含 `${}` 的失败语句保留空骨架"短路候选"（D8 结构性保证）不变；**短路命中（M8/AC-11）仍按原语义输出 MEDIUM**；未命中的空骨架不再进入 results，改由 `Outcome.skipped` 计入 SKIP（口径同解析失败，不影响退出码）。
 
 - 规则排序：`priority` 升序、同优先级按 ruleId 字典序（稳定输出）。
 - 单条规则 `check` 抛出异常（防御式）→ 捕获、stderr 警告（含 ruleId/statementId）、跳过该规则。
@@ -867,6 +867,7 @@ if unindexedTables 非空: 命中
 - 单文件、离线自包含：内联 CSS + 原生 JS（无 CDN/外链，满足不联网约束）；全部动态文本 HTML 转义（语句原文含 XML 标签/比较符必须转义）。
 - 结构：运行头（mode/commits/仓库/生成时间）→ 统计区（高/中/低/**通过**/SKIP/已忽略 + 口径恒等式行）→ 筛选栏（级别按钮 / 规则下拉 / 文件下拉 / 关键字）→ 分区明细（**高危默认展开**；中危/低危/**通过**/SKIP/已忽略默认折叠，`<details>` 原生可展开）→ 页脚（注明 JSON 契约）。
   「通过」= 参与分析且未命中任何规则的语句数（v1.7 由"未命中风险规则/无命中"更名，含头部统计卡片与恒等式行口径；JSON 契约不变）。
+  生成时间展示为**上海时区** `yyyy-MM-dd HH:mm:ss.SSS`（v1.11）；JSON 契约中的 `generatedAt` 仍为 ISO-8601 带偏移，不变。
 - 卡片模型：一条语句一张卡片（级别徽标 + statementId + `file:line (changeType, via …)` + 完整语句 SQL + 各 finding 消息与骨架序号）；级别筛选按语句最高级别。
 - 交互（原生 JS，无第三方）：级别/规则/文件/关键字四维筛选联动显隐卡片并实时显示可见计数；无 JS 环境下靠 `<details>` 仍可完整阅读。
 - 确定性：同一 `ReportModel` 输出逐字节一致（渲染不含当前时间等运行时值）；HTML 不参与黄金样例比对。
@@ -1106,20 +1107,20 @@ src/test/resources/cases/<caseId>/
 | DD-1 | 取消 `StatementCategory` 独立枚举，归类由 `level` + skipped 表达                                       | §4.1           |
 | DD-2 | CLI 手写解析（不引入 picocli 等框架），参数保持精简集合（v1.8 含 `--dialect/--db-url/--db-username/--db-password`）                                                        | §5             |
 | DD-3 | XML 原文切片依赖 SAX `Locator` 的 endElement 行号语义（JDK Xerces），编入单测                                   | §9.2           |
-| DD-4 | `<choose>` 骨架**惰性枚举**，`MAX_SKELETONS=8` 上限，超限截断并标 `truncated/uncertain`（需求方已确认）                | §10.2          |
+| DD-4 | `<choose>` 骨架**惰性枚举**，`MAX_SKELETONS=8` 上限，超限截断并标 `truncated/uncertain`（已确认）                | §10.2          |
 | DD-5 | 解析失败在 skipped[] 中以 `kind=PARSE_FAILED` + reason 前缀"解析失败："区分                                   | §4.2、§10.6     |
 | DD-6 | 规则优先级数值表（M8=-100 先行；H/M/L 分组）                                                              | §11.4、§17      |
 | DD-7 | Lambda 语句范围包含 wrapper 变量的执行调用行（D20 落地）                                                      | §9.7           |
-| DD-8 | 规则未收录的链式方法 → 忽略条件 + `hasUnknownFragment` + uncertain（不猜测语义）（需求方已确认）                          | §10.3          |
-| DD-9 | 片段与直接变更同时命中 → 直接变更优先，`changedVia=null`（需求方已确认）                                                 | §9.4           |
-| DD-10 | 多表谓词列归属歧义 → 归 `UNRESOLVED`，不参与 M1/M6 判定（需求方已确认）                                              | §10.5          |
+| DD-8 | 规则未收录的链式方法 → 忽略条件 + `hasUnknownFragment` + uncertain（不猜测语义）（已确认）                          | §10.3          |
+| DD-9 | 片段与直接变更同时命中 → 直接变更优先，`changedVia=null`（已确认）                                                 | §9.4           |
+| DD-10 | 多表谓词列归属歧义 → 归 `UNRESOLVED`，不参与 M1/M6 判定（已确认）                                              | §10.5          |
 | DD-11 | 单文件 5MB / include 深度 32 防护阈值                                                                 | §17            |
 | DD-12 | 报告 DTO 与模型 1:1、`serializeNulls`、字段顺序固定                                                        | §12.3          |
 | DD-13 | 元数据 **JDBC 一次快照**：P1 单次连接加载 → 关闭 → 只读内存（不重复连接/加载）；失败即 exit 2（v1.8/D24）                           | §7、§13.2       |
 | DD-14 | **方言扩展流程**：实现 `SqlDialect` → `SqlDialects` 注册 → 分页识别用例 → 放开配置值；未支持值报错不降级（v1.8/D25）                     | §10.7          |
 | DD-15 | JDBC 驱动**直接在 pom 中引用**（MySQL Connector/J，compile → 随 shaded jar；无外置驱动目录）；测试元数据用 H2 内存库（test scope）（v1.8/D27，2026-10-15 确认）        | §7、§18.2       |
 
-> DD-4、DD-8、DD-9、DD-10 已由需求方确认（2026-10-14）；DD-13/DD-14 随 2026-10-15 扩展需求确认，DD-15 待复核；其余 DD 项为实现级细化，随编码落地，如与需求方预期不符走评审调整。
+> DD-4、DD-8、DD-9、DD-10 已确认（2026-10-14）；DD-13/DD-14 随 2026-10-15 扩展需求确认，DD-15 待复核；其余 DD 项为实现级细化，随编码落地，如与预期不符走评审调整。
 
 ***
 
@@ -1227,24 +1228,26 @@ SQL 上线风险静态检查工具 v0.1
 
 ***
 
-*文档完。v1.1（2026-10-14）：DD-4/DD-8/DD-9/DD-10 经需求方确认；其余 DD 项为实现级细化。基于需求文档 v1.0 与概要设计 v1.7 编制；如与概要设计冲突以本文为准并回写概要设计。*
+*文档完。v1.1（2026-10-14）：DD-4/DD-8/DD-9/DD-10 经确认；其余 DD 项为实现级细化。基于需求文档 v1.0 与概要设计 v1.7 编制；如与概要设计冲突以本文为准并回写概要设计。*
 
 *v1.2（2026-10-14，M9 收尾回写）：① D19 role 推断补充裸 `<if>WHERE …</if>` 形态（§9.5 动态求值——H1/H2/H3 保守附注修复，ac03 暴露）；② changeType 判定细则与 changedVia 格式明确（§9.4）；③ `Set<Integer>` 行集合、ConfigLoader 实际签名、SqlSourceExtractor 实现形态回写（§8.3/§6/§9.1）；④ §12.3 `sql` 字段三态语义（命中骨架/骨架#0/M8 原文）；⑤ §18.2 夹具确定性（固定提交身份与时间）与黄金 IT 执行约定。*
 
-*v1.3（2026-10-14，交付后增补，需求方确认）：① 新增 §12.5 `HtmlReporter`——`--output` 目录默认双产出 `sql_risk_report.json` + `sql_risk_report.html`（JSON 仍为机器契约，HTML 为阅读层，含级别/规则/文件/关键字筛选与折叠）；② §12.2 控制台"报告已生成"两行列出；③ §17 增 `REPORT_FILE_NAME_HTML`；④ §5 入口调试便利（argv 为空 → `DEBUG_DEFAULT_ARGV`）。*
+*v1.3（2026-10-14，交付后增补，确认）：① 新增 §12.5 `HtmlReporter`——`--output` 目录默认双产出 `sql_risk_report.json` + `sql_risk_report.html`（JSON 仍为机器契约，HTML 为阅读层，含级别/规则/文件/关键字筛选与折叠）；② §12.2 控制台"报告已生成"两行列出；③ §17 增 `REPORT_FILE_NAME_HTML`；④ §5 入口调试便利（argv 为空 → `DEBUG_DEFAULT_ARGV`）。*
 
-*v1.4（2026-10-15，需求方驱动）：① §9.5 增补「Wrapper SQL 段识别」——注解 `${ew.customSqlSegment}` 等占位符在 `@Param`/参数名解析到 Wrapper 家族参数时不再误报 M8，绑定失配仍命中；② §10.6 增补占位符代换规则与 `uncertain` 语义；③ §11.4 M8 判定增加排除项；④ §18.3 增 `ac12-annotation-wrapper` 用例。*
+*v1.4（2026-10-15，需求驱动）：① §9.5 增补「Wrapper SQL 段识别」——注解 `${ew.customSqlSegment}` 等占位符在 `@Param`/参数名解析到 Wrapper 家族参数时不再误报 M8，绑定失配仍命中；② §10.6 增补占位符代换规则与 `uncertain` 语义；③ §11.4 M8 判定增加排除项；④ §18.3 增 `ac12-annotation-wrapper` 用例。*
 
-*v1.5（2026-10-15，需求方驱动）：① §9.7 增补「控制流分支识别」——wrapper 变量在 if/else、switch/case 中添加条件时记录分支坐标（M15）；② §10.3 增补分支枚举渲染（每分支一骨架，对齐 `<choose>`；无 else 的 if / 循环体按 `<if>` 保守丢弃；组合超 MAX_SKELETONS 截断）；③ §18.3 增 `ac13-lambda-branches` 用例。*
+*v1.5（2026-10-15，需求驱动）：① §9.7 增补「控制流分支识别」——wrapper 变量在 if/else、switch/case 中添加条件时记录分支坐标（M15）；② §10.3 增补分支枚举渲染（每分支一骨架，对齐 `<choose>`；无 else 的 if / 循环体按 `<if>` 保守丢弃；组合超 MAX_SKELETONS 截断）；③ §18.3 增 `ac13-lambda-branches` 用例。*
 
-*v1.6（2026-10-15，需求方驱动）：§11.2 增「空骨架归口」——解析产物为空（含 `${}` 解析失败的短路候选）且语句级短路未命中时归 SKIP（PARSE_FAILED），不再作为 `level=null` 结果输出；短路命中语义不变（AC-11）。§10.6/§18.3 同步。*
+*v1.6（2026-10-15，需求驱动）：§11.2 增「空骨架归口」——解析产物为空（含 `${}` 解析失败的短路候选）且语句级短路未命中时归 SKIP（PARSE_FAILED），不再作为 `level=null` 结果输出；短路命中语义不变（AC-11）。§10.6/§18.3 同步。*
 
-*v1.7（2026-10-15，需求方驱动）：§12.5 HTML 报告文案与统计——「未命中风险规则/无命中」更名为「**通过**」（分区标题、卡片徽标、恒等式行口径），头部统计卡片新增「通过」数量；JSON 报告契约不变。*
+*v1.7（2026-10-15，需求驱动）：§12.5 HTML 报告文案与统计——「未命中风险规则/无命中」更名为「**通过**」（分区标题、卡片徽标、恒等式行口径），头部统计卡片新增「通过」数量；JSON 报告契约不变。*
 
-*v1.8（2026-10-15，需求方扩展驱动，FR-8/FR-9）：① §7 重写——元数据改为 `JdbcMetadataProvider` **JDBC 一次加载**（连接即关、失败 exit 2），文件通道（`JsonMetadataProvider`/`--metadata`/`metadata_file`）移除（D24/DD-13）；② §10.4/§10.5/新增 §10.7——`SqlDialect` 方言 SPI（MySQL 实现 + Oracle/PG 预留要点 + 未支持值报错，D25/DD-14）；③ §6 增 `DataSourceSetting` 与连接三通道/密码优先级（D26）；④ §7/§18.2 JDBC 驱动**pom 内嵌**（MySQL Connector/J）与 H2 测试载体（D27/DD-15，2026-10-15 确认）；⑤ §5/§13/§15/§17/§18/附录 B 同步。*
+*v1.8（2026-10-15，扩展驱动，FR-8/FR-9）：① §7 重写——元数据改为 `JdbcMetadataProvider` **JDBC 一次加载**（连接即关、失败 exit 2），文件通道（`JsonMetadataProvider`/`--metadata`/`metadata_file`）移除（D24/DD-13）；② §10.4/§10.5/新增 §10.7——`SqlDialect` 方言 SPI（MySQL 实现 + Oracle/PG 预留要点 + 未支持值报错，D25/DD-14）；③ §6 增 `DataSourceSetting` 与连接三通道/密码优先级（D26）；④ §7/§18.2 JDBC 驱动**pom 内嵌**（MySQL Connector/J）与 H2 测试载体（D27/DD-15，2026-10-15 确认）；⑤ §5/§13/§15/§17/§18/附录 B 同步。*
 
 *v1.8 实现回写（2026-10-15，M10/M11 落地）：① §7 类型跨库别名归一（CHARACTER VARYING/CHAR VARYING→VARCHAR、CHARACTER→CHAR、INTEGER→INT，H2 实测）；② §6 ConfigLoader 增环境变量注入重载（测试用，密码优先级语义不变）；③ §10.7 方言经 `ParseContext` 装配（3 参构造缺省 MySQL，引擎注入配置值）；④ 概要设计 §3.3 依赖图新增 `config → parser` 边（方言取值校验经 `SqlDialects.supportedNames()`，无环）。*
 
-*v1.10（2026-10-15，FR-9 方言落地，需求方驱动）：**PostgreSQL 方言实现**——① §10.7 新增 `PostgresDialect`（`DbType.postgresql`；`LIMIT n` 按 limit 节点 `rowCount` 判定；`FETCH FIRST|NEXT n ROWS ONLY` 因 Druid 1.2.23 未入 limit 节点而在方言内做受限文本判定；纯 OFFSET 与 UPDATE/DELETE 保守 false）；② **`hasLimit` 语义完全归方言**——`QueryFactsBuilder` 移除 `block.getLimit() != null` 快捷路径（修正 PG 纯 OFFSET 被误判为有限制；MySQL 逐字节零漂移，全量黄金用例回归）；③ pom 按 D27 同策略内置 PostgreSQL JDBC 驱动（42.2.25，随 shaded jar）；④ 配置/CLI/README/默认配置文案放开 `postgresql`；⑤ 测试：`PostgresDialectTest`（12 形态正反例）+ `SqlDialectsTest` 端到端事实 + CLI 冒烟 + 黄金用例 `ac14-postgres-dialect`；323 用例全绿。*
+*v1.11（2026-10-15）：§12.5 HTML 报告「生成时间」展示格式调整为上海时区 `yyyy-MM-dd HH:mm:ss.SSS`（如 `2026-10-15 22:30:45.123`）；JSON 契约不变，HTML 确定性与黄金样例零影响；`HtmlReporterTest` 同步断言。*
 
-*v1.9（2026-10-14，Sonar 规范治理，需求方驱动）：① §14 新增 `Diagnostics`——诊断输出统一出口，生产代码 `System.err` 用法集中至此一处（S106 设计性豁免登记化）；② §11.1 `RuleContext.facts()` 契约收紧——语句级上下文（parsedSql=null）调用即抛 `IllegalStateException`（fail fast，原返回 null 的误用隐患消除；引擎 `safeCheck` 兜底不变，S2259 类问题根治）；③ §6 `ConfigLoader` 移除未使用的 `repoPath` 保留参数（S1172）；④ 全量代码按 Sonar 规范重构（复杂度拆分、重复字面量常量化、循环→Stream、断言规范等），设计性例外集中登记于 `docs/sonar-exceptions.md`（S106/S107/S1181）；⑤ §18.3 `ac06` 夹具按 S7158 调整（`String.isEmpty()`）并更新 expected 的 head SHA（语义字段零漂移）。*
+*v1.10（2026-10-15，FR-9 方言落地，需求驱动）：**PostgreSQL 方言实现**——① §10.7 新增 `PostgresDialect`（`DbType.postgresql`；`LIMIT n` 按 limit 节点 `rowCount` 判定；`FETCH FIRST|NEXT n ROWS ONLY` 因 Druid 1.2.23 未入 limit 节点而在方言内做受限文本判定；纯 OFFSET 与 UPDATE/DELETE 保守 false）；② **`hasLimit` 语义完全归方言**——`QueryFactsBuilder` 移除 `block.getLimit() != null` 快捷路径（修正 PG 纯 OFFSET 被误判为有限制；MySQL 逐字节零漂移，全量黄金用例回归）；③ pom 按 D27 同策略内置 PostgreSQL JDBC 驱动（42.2.25，随 shaded jar）；④ 配置/CLI/README/默认配置文案放开 `postgresql`；⑤ 测试：`PostgresDialectTest`（12 形态正反例）+ `SqlDialectsTest` 端到端事实 + CLI 冒烟 + 黄金用例 `ac14-postgres-dialect`；323 用例全绿。*
+
+*v1.9（2026-10-14，Sonar 规范治理，需求驱动）：① §14 新增 `Diagnostics`——诊断输出统一出口，生产代码 `System.err` 用法集中至此一处（S106 设计性豁免登记化）；② §11.1 `RuleContext.facts()` 契约收紧——语句级上下文（parsedSql=null）调用即抛 `IllegalStateException`（fail fast，原返回 null 的误用隐患消除；引擎 `safeCheck` 兜底不变，S2259 类问题根治）；③ §6 `ConfigLoader` 移除未使用的 `repoPath` 保留参数（S1172）；④ 全量代码按 Sonar 规范重构（复杂度拆分、重复字面量常量化、循环→Stream、断言规范等），设计性例外集中登记于 `docs/sonar-exceptions.md`（S106/S107/S1181）；⑤ §18.3 `ac06` 夹具按 S7158 调整（`String.isEmpty()`）并更新 expected 的 head SHA（语义字段零漂移）。*

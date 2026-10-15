@@ -1,7 +1,7 @@
 # 开发任务拆解（TASKS）
 
 > 依据：详细设计 v1.1、概要设计 v1.7。规模估算 S/M/L 仅用于排序参考（S≈半天内，M≈1~2 天，L≈3 天+）。
-> **完成定义（DoD）**：`mvn -o clean verify` 通过；任务对应单测齐备（规则类须含 正例/反例/边界 三类）；不破坏既有黄金用例；**代码满足 Sonar 代码规范（需求方扫描验证，新代码零新增违规；设计性例外须登记豁免并附理由）**；勾选本文件并标注日期。
+> **完成定义（DoD）**：`mvn -o clean verify` 通过；任务对应单测齐备（规则类须含 正例/反例/边界 三类）；不破坏既有黄金用例；**代码满足 Sonar 代码规范（扫描验证，新代码零新增违规；设计性例外须登记豁免并附理由）**；勾选本文件并标注日期。
 > 开发期每完成一个任务建议一个小 commit（`feat(模块): …` / `test(模块): …` / `docs: …`）。
 
 ## 里程碑总览
@@ -22,11 +22,11 @@
 | M11 | 方言 SPI（MySQL 基线 + 扩展机制，FR-9）    | S  | M10                 | SqlDialectsTest；解析行为零变化 |
 | M12 | 测试夹具迁移与回归（H2）                    | M  | M11                 | 黄金用例全绿；ac09 新错误形态 |
 
-依赖链：`M0 → M1 → {M2, M3, M4}`；`M4 → M5 → M6 → M7 → M8 → M9 → 交付后增补 → M10 → M11 → M12`。M2 与 M3/M4 可并行；M5、M6、M7 各自内部子任务按序推进；**M10~M12 为扩展需求（FR-8/FR-9，详设 v1.8）实现串行链**，门禁沿用：每里程碑完成测试并经需求方确认后进入下一阶段。
+依赖链：`M0 → M1 → {M2, M3, M4}`；`M4 → M5 → M6 → M7 → M8 → M9 → 交付后增补 → M10 → M11 → M12`。M2 与 M3/M4 可并行；M5、M6、M7 各自内部子任务按序推进；**M10~M12 为扩展需求（FR-8/FR-9，详设 v1.8）实现串行链**，门禁沿用：每里程碑完成测试并经确认后进入下一阶段。
 
 ***
 
-## M0 工程与测试基建 ✅ 2026-10-14（需求方已确认）
+## M0 工程与测试基建 ✅ 2026-10-14（已确认）
 
 - [x] **T0.1**（2026-10-14）离线构建验证：`mvn -o clean verify` 空工程通过；依赖均可从本地仓库解析（首次需在线校准一次来源追踪，之后离线稳定可用）【S】
 - [x] **T0.2**（2026-10-14）测试基建：`FixtureRepoBuilder/FixtureRepo`、`GoldenCase/GoldenCaseRunner/GoldenPipeline/CaseInput`、`TestClocks`、`JsonAssertions`（含自测）【S】→ 详细设计 §18.2
@@ -35,7 +35,7 @@
   - ✅ Druid：`UPDATE/DELETE ... LIMIT` 的 `getLimit()` 方言 AST 可达；`SELECT *` 需经 `SQLSelectItem.getExpr()` 取 `SQLAllColumnExpr`（M6 编码注意点）；
   - ✅ JavaParser：`extends BaseMapper<T>` / `ServiceImpl<M,T>`、字段与构造泛型实参均可达（`getFields()` 列表 API），显式泛型场景无需符号求解器。
 
-## M1 model + util ✅ 2026-10-14（需求方已确认）
+## M1 model + util ✅ 2026-10-14（已确认）
 
 - [x] **T1.1**（2026-10-14）枚举：`Mode/ChangeType/StatementSource/DiffType/RiskLevel`（含 `max/weight`）→ 详设 §4.1
 - [x] **T1.2**（2026-10-14）值对象：`ExtractedStatement/StatementMeta/Finding/StatementResult/SkippedItem(IgnoredItem)/Summary/ReportModel`（不可变、集合包装、空值约定）→ 详设 §4.2
@@ -43,7 +43,7 @@
   - 备注：行集合实现采用 `Set<Integer>`（详设 §8.3 原文 `IntSortedSet` 系笔误），M4 `Hunk` 沿用，**已回写（详设 v1.2 §8.3）**
   - 备注：受控异常基类 `SqlRiskException`（§15）放置于 util 包（跨模块共享，避免污染 model 层）
 
-## M2 cli + core 骨架 ✅ 2026-10-14（需求方已确认）
+## M2 cli + core 骨架 ✅ 2026-10-14（已确认）
 
 - [x] **T2.1**（2026-10-14）`CliArgs` 手写解析（8 参数 + `--help`）+ `ExitCode` + 参数校验矩阵（缺参/未知/重复/缺值/format 非 json）→ 详设 §5
 - [x] **T2.2**（2026-10-14）`RunContext`（mode 判定）+ `AnalysisEngine` 管线占位（P0~P9 顺序 + 并行执行器框架 + 注入时钟）→ 详设 §13
@@ -51,7 +51,7 @@
 - 验收（实物）：空仓库运行 → 空报告 + exit 0；缺参数 → `[错误]` + exit 2；`--help` → 用法；16 个新测试全绿（累计 50）
   - 备注：shade 产物名经 `<outputFile>` 固定为 `target/sql-risk-checker-shaded.jar`（与文档一致）；受控异常基类 `SqlRiskException` 落 util 包
 
-## M3 config + metadata ✅ 2026-10-14（需求方已确认）
+## M3 config + metadata ✅ 2026-10-14（已确认）
 
 - [x] **T3.1**（2026-10-14）`ConfigLoader/AppConfig/RuleSetting/ConfigValidator/ConfigException`：三层合并（默认<用户 yaml<CLI）、rules 按 ruleId 覆盖（level 缺省继承）、已移除/未知键告警忽略、白名单模式校验 → 详设 §6
 - [x] **T3.2**（2026-10-14）`JsonMetadataProvider`：加载校验矩阵（缺文件/语法/结构 → exit 2）、重复表名取首条、大小写不敏感、`find` 未命中 = 无索引语义 → 详设 §7
@@ -60,7 +60,7 @@
   - 备注：`ConfigLoader.load(configPath, metadataArg, repoPath)` 代替详设示意 `load(CliArgs)`，避免 config 反向依赖 cli（§3.3），**已回写（详设 v1.2 §6）**
   - 备注：测试抓出白名单正则漏 `*` 的 bug（`(\.[A-Za-z_$][\w$])*` → `[\w$]*`）并修复
 
-## M4 diff（提交树数据源）✅ 2026-10-14（需求方已确认）
+## M4 diff（提交树数据源）✅ 2026-10-14（已确认）
 
 - [x] **T4.1**（2026-10-14）`GitRepo`（只读打开、ref/完整/缩写 sha 解析、提交树内容读取 + 编码探测）+ `RepoContentReader` → 详设 §8.1/§8.2
 - [x] **T4.2**（2026-10-14）`DiffService` + `ChangeSet/FileChange/Hunk`：候选过滤、DELETE 不产出、RENAME 按新增侧（D15）、hunk 行集合与锚点 → 详设 §8.3
@@ -69,7 +69,7 @@
 - 验收：16 个新用例全绿（累计 91）；P2 接线贯通（报告 head/prod = 解析后 sha；空差异短路；ac09 五类错误分支全集闭合）
   - 备注：实测 JGit 行为——不存在的完整 hex 走 `MissingObjectException`（消息"commit 不存在"）
 
-## M5 extractor ✅ 2026-10-14（需求方已确认，含真实项目全量扫描验证）
+## M5 extractor ✅ 2026-10-14（已确认，含真实项目全量扫描验证）
 
 - [x] **T5.1**（2026-10-14）`MapperXmlParser`（SAX+XXE 加固+失败隔离）+ `MapperXmlExtractor`（按行范围切片完整原文，D20）→ 详设 §9.2
 - [x] **T5.2**（2026-10-14）`XmlFragmentIndex`（站点/片段/反向引用、refid 规范化、闭包传递/跨文件/防循环、未解析可见）+ `FragmentPropagator`（直接优先 DD-9）→ 详设 §9.3/§9.4
@@ -82,7 +82,7 @@
   - 备注：`SqlSourceExtractor` SPI 由两类 Java 提取器实现；XML 为选择驱动独立入口（**已回写，详设 v1.2 §9.1**）
   - **真实项目验证**（union-order-app，HEAD=a32658d8，508 文件）：提取 57 条（Lambda 45 / 注解 2 / XML 10），SKIP 0，**5.8s**；观察到真实 `${ew.customSqlSegment}` 拼串与运行期布尔条件普遍存在（M7/M8 规则的现实命中面）
 
-## M6 parser ✅ 2026-10-14（需求方已确认）
+## M6 parser ✅ 2026-10-14（已确认）
 
 - [x] **T6.1**（2026-10-14）`PlaceholderNormalizer` + `DruidSqlParser`（别名包装）→ 详设 §10.1/§10.4
 - [x] **T6.2**（2026-10-14）`DynamicEvaluator`：折叠规则表、choose 双路带路径标签、include 展开（property/深度防循环）、丢弃溯源 role、上限 8 截断（DD-4，实现为"带上限即时枚举"）→ 详设 §10.2
@@ -94,7 +94,7 @@
   - 真实数据修复②：含 `${}` 语句解析失败不再丢失 M8 判定 → 保留为空骨架"短路候选"（D8 结构性保证，§8.5）
   - 限制标注：UNION 简化为"有过滤 + uncertain"；子查询内容隔离
 
-## M7 rule ✅ 2026-10-14（需求方已确认）
+## M7 rule ✅ 2026-10-14（已确认）
 
 - [x] **T7.1**（2026-10-14）`Rule/RuleContext/RuleProvider` SPI + `RuleRegistry`（13 内置 + ServiceLoader + level/enabled 覆盖）+ `RuleEngine`（语句级短路 → 骨架循环首命中即停 → 归类，防御式跳过）→ 详设 §11.1~§11.3
 - [x] **T7.2**（2026-10-14）H1~H3（保守折叠提示附注、无表语句不判定）→ 详设 §11.4
@@ -103,7 +103,7 @@
 - 验收：13 个规则测试类 + `RuleEngineTest`（短路/首命中即停/禁用/级别覆盖），54 个新用例（累计 218）
   - **真实项目判定**（union-order-app 全量，5.6s）：高危 5（全部为 H3 + 保守折叠附注——运行期条件丢弃后 WHERE 消失，D19 行为兑现）| 中危 52（2 条 M8 `${ew.customSqlSegment}` + 50 条 M1 空元数据预期噪音）| 退出码 1（CI 门禁语义可用）
 
-## M8 report + 汇总 ✅ 2026-10-14（需求方已确认）
+## M8 report + 汇总 ✅ 2026-10-14（已确认）
 
 - [x] **T8.1**（2026-10-14）`WhitelistFilter`：精确/`namespace.*` 前缀、Lambda 语句不参与（`WhitelistFilterTest` 8 用例）→ 详设 §13.3
 - [x] **T8.2**（2026-10-14）`SummaryCalculator`：口径公式 + 恒等式断言（`total+skip+ignored==提取总数`，`SummaryCalculatorTest` 4 用例）→ 详设 §13.4
@@ -113,7 +113,7 @@
 - 验收：ac07/ac08；黄金 JSON 全量比对；28 个新用例（累计 **246 全绿**）
   - **真实项目验证**（union-order-app 全量）：控制台模板落实（运行头/统计行/高危明细含 H3 保守附注/报告路径）；`sql_risk_report.json` 63KB 落盘、字段契约与恒等式（57=5+52+0+0+0）正确；白名单演示（`com.niwodai.*`）→ 已忽略 12 条（XML/注解）、45 条 Lambda 不受影响；退出码 1
 
-## M9 端到端与收尾 ✅ 2026-10-14（需求方已确认）
+## M9 端到端与收尾 ✅ 2026-10-14（已确认）
 
 - [x] **T9.1**（2026-10-14）`AnalysisEngineIT` 跑通全部用例：12 个黄金目录（ac01/ac02/ac03/ac04/ac05/ac05b/ac06/ac07/ac08/ac11/skip-parse-failed/m1-metadata-semantics，每用例强断言 §13.4 口径恒等式）+ ac09 错误分支专项测试（非 git/非法 commit/坏配置/元数据缺失/格式错误 → exit 2）→ 详设 §18.3
 - [x] **T9.2**（2026-10-14）确定性验证：提交身份/时间固定后，同一夹具两次运行与两个独立 JVM（两次 `mvn test`）报告逐字节一致；黄金 expected 含真实提交 SHA 可比对
@@ -122,7 +122,7 @@
 - [x] **T9.5**（2026-10-14）收尾：偏差回写（详设 v1.2：§8.3 `Set<Integer>`、§6 ConfigLoader 签名、§9.1 SPI 形态、§9.4/§9.5/D19 补充、§12.3 sql 三态、§18.1 12→13、§18.2 夹具确定性）；README（用法/参数/退出码/规则表）与 JOURNAL 更新；全量 `mvn -o clean verify` **263/263 全绿**
 - **过程中修复 2 个真实缺陷**：① 裸 `<if>WHERE …</if>` 折叠未归 `CONDITION`，H1/H2/H3 保守附注在该常见形态缺失（ac03 暴露；含 `DynNode.innerText()` 角色推断修正）；② JGit `PersonIdent(PersonIdent)` 拷贝构造器重置提交时间，夹具 SHA 跨 JVM 不稳定（黄金比对暴露；改复用固定实例）
 
-## M10 数据库元数据（JDBC 接入，FR-8）✅ 2026-10-15（需求方已确认；真实 MySQL 连库验证延至 M12）
+## M10 数据库元数据（JDBC 接入，FR-8）✅ 2026-10-15（已确认；真实 MySQL 连库验证延至 M12）
 
 - [x] **T10.1**（2026-10-15）config/CLI 改造：`DataSourceSetting` + `AppConfig`（去 `metadataFile`，加 `datasource`/`dialect`）；`CliArgs` 增 `--dialect/--db-url/--db-username/--db-password`、移除 `--metadata`；`ConfigLoader` CLI 覆盖 + 密码三级优先级（CLI > `SQL_RISK_DB_PASSWORD` > yaml）+ `metadata_file` 已移除键告警 + 校验（url 必填、`jdbc:` 前缀）→ 详设 §5/§6
 - [x] **T10.2**（2026-10-15）元数据加载：pom 引入 MySQL Connector/J（compile）；`JdbcMetadataProvider`（一次连接加载：`getTables/getColumns/getIndexInfo`、类型归一化、索引列序、连接即关、失败 → `MetadataException` exit 2）→ 详设 §7；删除 `JsonMetadataProvider` 与 `examples/sql-risk-metadata.example.json`
@@ -130,9 +130,9 @@
 - [x] **T10.4**（2026-10-15）黄金夹具迁移与错误形态更新（M，**原 T12.1/T12.2 并入**：M10 删除 `JsonMetadataProvider` 后，用例 `metadata.json` 依赖必须同步迁移）：14 用例 `metadata.json` → `schema.sql`（H2 内存库建 schema → `JdbcMetadataProvider` 加载）；`GoldenCase`/`AnalysisEngineIT` 管线更新；expected 应零漂移（逐条人工复核）；ac09 的"元数据缺失/格式错误"改为"连接失败（非法 url）/datasource.url 缺失/方言未支持"
 - 验收（2026-10-15 实测）：`JdbcMetadataProviderTest` 6 用例（H2：类型归一 VARCHAR/INT 别名、索引列序、快照独立于连接关闭、失败 exit 2）；Config/CliArgs/Engine/Main 测试全部按新语义更新；**14 个黄金用例 expected 零漂移**（H2 元数据与旧 JSON 语义等价验证）；**306/306 全绿**；离线 `mvn -o clean verify` 通过（在线校准一次：MySQL Connector/J 8.0.33 + H2 2.2.224 后恢复离线）；shaded jar 21.2MB（含驱动）
   - 说明：`--metadata`/`metadata_file`/`JsonMetadataProvider`/`examples/sql-risk-metadata.example.json` 全部移除（`metadata_file` 出现时告警忽略）；ac09 错误形态改为"连接失败（未知驱动）/datasource.url 未配置/方言未支持"
-  - 注：真实 MySQL 连库验证需需求方提供连接信息（安排在 M12 回归时统一执行；已于 2026-10-14 补验完成，见 T12.1）
+  - 注：真实 MySQL 连库验证需连接信息（安排在 M12 回归时统一执行；已于 2026-10-14 补验完成，见 T12.1）
 
-## M11 方言 SPI（MySQL 基线 + 扩展机制，FR-9）✅ 2026-10-15（需求方已确认）
+## M11 方言 SPI（MySQL 基线 + 扩展机制，FR-9）✅ 2026-10-15（已确认）
 
 - [x] **T11.1**（2026-10-15）方言抽象：`SqlDialect`/`SqlDialects`/`MysqlDialect`（`hasRowLimit` 现行为迁入）；`DruidSqlParser.parse(sql, dialect)`、`QueryFactsBuilder` 的 `hasLimit` 走方言 → 详设 §10.4/§10.5/§10.7
 - [x] **T11.2**（2026-10-15）配置放开与扩展机制验证：`dialect` ∈ `supportedNames()`；未支持值（`oracle`/`postgresql`）→ 明确报错 exit 2（不降级）；以测试替身方言验证"实现 SPI → 注册 → 可用"的扩展路径 → 详设 §6/§10.7
@@ -140,9 +140,9 @@
   - 扩展路径（契约）：实现 `SqlDialect` → `META-INF/services` 注册 → 配置 `dialect: <name>` 即可用；未实现值报错不降级
   - 回写清单（M12）：概设 §3.3 依赖图新增 `config → parser`（方言取值校验经 `SqlDialects.supportedNames()`）
 
-## M12 端到端回归与收尾 ✅ 2026-10-15（需求方已确认；T12.1 真实 MySQL 验证于 2026-10-14 补验完成）
+## M12 端到端回归与收尾 ✅ 2026-10-15（已确认；T12.1 真实 MySQL 验证于 2026-10-14 补验完成）
 
-- [x] **T12.1**（2026-10-14 补验完成）真实 MySQL 连库验证——需求方提供连接信息（`default-config.yaml`）后以 `union-order-app` 真实仓库（`dec908da`，FULL 模式）端到端执行：
+- [x] **T12.1**（2026-10-14 补验完成）真实 MySQL 连库验证——连接信息就绪（`default-config.yaml`）后，以 `union-order-app` 真实仓库（`dec908da`，FULL 模式）端到端执行：
   - **连接与一次加载**：`[元数据] jdbc:mysql://127.0.0.1:3306/union_order 加载 9 张表（一次加载，连接已关闭）`，加载日志全流程仅出现 1 次（AC-12 证据）；库内 9 张表与 `init.sql` 表清单一致
   - **元数据来自库内实时结构（铁证）**：库内 `cash_order.uid` 索引为文件快照所无 → `WHERE uid = ?` 语句**未命中 M1**（若用文件快照会误报）；反方向：M1 命中 12 条逐条对照库内索引首列全部属实，索引列负例 12 例（cash_no/uid/credit_id/code/order_no）零误报
   - **保守语义**：`quota_change_record`/`quota_order` 不在库快照中 → 命中"表不在元数据中，默认无索引"（D13）
@@ -154,14 +154,14 @@
 
 ***
 
-## M13 PostgreSQL 方言（FR-9 落地，需求方驱动）✅ 2026-10-15（**需求方已确认**）
+## M13 PostgreSQL 方言（FR-9 落地，需求驱动）✅ 2026-10-15（**已确认**）
 
 - [x] **T13.1**（2026-10-15）`PostgresDialect` 实现与注册：`DbType.postgresql`；`hasRowLimit` = limit 节点且 `rowCount` 非空（`LIMIT n [OFFSET m]`）或文本含 `FETCH FIRST|NEXT n ROWS ONLY`（Druid 1.2.23 未归入 limit 节点，方言内受限判定收敛）；**纯 OFFSET 与 UPDATE/DELETE 保守 false**；`SqlDialects` 内置注册 → `supportedNames` 含 `postgresql`
 - [x] **T13.2**（2026-10-15）`hasLimit` 语义完全归方言：`QueryFactsBuilder.buildSelect` 移除 `block.getLimit() != null` 快捷路径（该路径把 PG 纯 OFFSET 误判为"有限制"→ H3 漏报）；MySQL 逐字节零漂移（全量黄金用例回归验证）
 - [x] **T13.3**（2026-10-15）驱动与配置放开：pom 按 D27 同策略内置 PostgreSQL JDBC 42.2.25（compile → 随 shaded jar）；`--dialect`/报错文案/默认配置注释/README/CLAUDE.md 放开 `postgresql`
 - [x] **T13.4**（2026-10-15）测试：`PostgresDialectTest`（12 形态正反例：LIMIT/带 OFFSET/FETCH FIRST|NEXT/纯 OFFSET/无限制/UPDATE/DELETE/INSERT）；`SqlDialectsTest` 端到端事实（parse→hasLimit）+ 配置放开；`SqlRiskCheckerMainTest` CLI 冒烟（`--dialect postgresql` 全链路）；黄金用例 **ac14-postgres-dialect**（FETCH FIRST → 无 H3；纯 OFFSET → H3 命中）
 - [x] **T13.5**（2026-10-15）回归与文档：`mvn -o clean verify` **323/323 全绿**；详设 v1.10（§10.7/§18.3/变更记录）、概要 v1.10（修订行/§3.5 驱动表）、README、CLAUDE.md、JOURNAL 回写
-- [x] **T13.6**（2026-10-15，需求方提供连接信息后执行）真实 PostgreSQL 连库验证（`localhost:5432/postgres?currentSchema=union_order`）：
+- [x] **T13.6**（2026-10-15，连接信息就绪后执行）真实 PostgreSQL 连库验证（`localhost:5432/postgres?currentSchema=union_order`）：
   - **连接与一次加载**：加载 9 张表（日志仅 1 次）；库内表清单与 PG 实查一致
   - **与 MySQL 版报告逐字节一致**（同一仓库 `union-order-app`，忽略 generatedAt）——方言切换零漂移的最强证据
   - **M1 正反例复核**（对照 PG 库内索引实查）：命中 12 条逐条属实、索引列负例（cash_no/uid/code/credit_no 等）零误报、库外表保守命中（D13）
@@ -172,7 +172,7 @@
 
 ***
 
-## 交付后增补（post-M9，需求方驱动）
+## 交付后增补（post-M9，需求驱动）
 
 - [x] 2026-10-14 入口调试便利：argv 为空 → `DEBUG_DEFAULT_ARGV`（IDE 直跑 main 可调试），stderr 打印 `[调试]` 提示 → 详设 §5
 - [x] 2026-10-14 构建清理：禁用 shade 自动生成 `dependency-reduced-pom.xml`（本项目仅供 `java -jar` 直跑，无 install/deploy 消费场景）→ pom 注释
@@ -183,12 +183,13 @@
 - [x] 2026-10-15 空骨架归口 SKIP：解析产物为空（含 `${}` 解析失败的短路候选）且语句级短路未命中 → 从 `level=null` 结果改归 SKIP（PARSE_FAILED，"无可用 SQL 骨架"）；短路命中语义不变（AC-11）；`RuleEngine.run` 返回 `Outcome{results, skipped}`；ac12 增第三形态；302 用例全绿 → 详设 v1.6（§11.2-④）
 - [x] 2026-10-15 HTML 报告文案与统计：分区/徽标「未命中风险规则·无命中」更名为「**通过**」，头部统计新增「通过」卡片（= total − 高 − 中 − 低）与恒等式行口径同步；JSON 契约不变；302 用例全绿 → 详设 v1.7（§12.5）
 - [x] 2026-10-15 扩展实现（FR-8/FR-9）**交付完毕**：设计定稿（需求 v1.1、概要 v1.8、详设 v1.8 含实现回写）；**M10 数据库元数据 / M11 方言 SPI / M12 回归与收尾 均已确认**（真实 MySQL 验证为唯一暂缓项）；312 用例全绿
-- [x] 2026-10-14 **Sonar 规范治理（需求方驱动）**：以 SonarCloud 扫描报告（165 issue / 23 规则，IMPACT_RANK）为输入，按三批治理并全量回归：
+- [x] 2026-10-15 HTML 报告「生成时间」格式：改为上海时区 `yyyy-MM-dd HH:mm:ss.SSS`（例 `2026-10-15 22:30:45.123`）；JSON 契约与黄金样例零影响 → 详设 v1.11（§12.5）
+- [x] 2026-10-14 **Sonar 规范治理（需求驱动）**：以 SonarCloud 扫描报告（165 issue / 23 规则，IMPACT_RANK）为输入，按三批治理并全量回归：
       - **BLOCKER 修复**：`javabugs:S2259`（NPE×11）根因根治——`RuleContext.facts()` 对语句级上下文改为 fail-fast（抛 `IllegalStateException`，引擎 `safeCheck` 兜底不变）；`S5998`（正则栈溢出）白名单模式改所有格量词（22 组用例等价性验证）；`S2447`（Boolean 返回 null）改 `Optional`。
       - **机械类批量修复**：S1128 未用导入 ×11、S1192 重复字面量 ×11、S9391 循环→Stream ×20、S1168 空集合返回 ×3、S1172 未用参数 ×7（含 `ConfigLoader.load` 移除 `repoPath` 保留参数，**详设 §6 同步**）、S8491/S7158/S1130/S5961/S5785/S8714/S1066/S127/S1905 等；**诊断输出集中化**：新增 `util/Diagnostics`，生产代码 `System.err` 从 22 处收敛至 1 处（S106 豁免点从 22 → 3）。
       - **认知复杂度拆分**（S3776 ×23，含 `LambdaSkeletonRenderer.applyCalls` 101 → 分组方法、`LambdaSqlExtractor.buildModels` 36 → 单一职责拆分）与 S135 循环跳转收敛 ×10。
       - **设计性例外集中登记**：`docs/sonar-exceptions.md`（EX-1 S106 标准流 / EX-2 S1181 顶层 Throwable 兜底 / EX-3 S107 值对象构造器 ×4），含理由、替代保障与失效条件；SonarCloud 侧按 Accepted 标记。
-      - **回归**：`mvn -o clean verify` **314 用例全绿**（含 14 黄金样例，ac06 夹具按 S7158 调整后 expected 仅 head SHA 变化、语义零漂移）；详设 v1.9 回写；**复扫由需求方执行验证**（预期剩余 = 登记例外）
+      - **回归**：`mvn -o clean verify` **314 用例全绿**（含 14 黄金样例，ac06 夹具按 S7158 调整后 expected 仅 head SHA 变化、语义零漂移）；详设 v1.9 回写；**复扫待执行验证**（预期剩余 = 登记例外）
 
 ## 预研风险清单（M0.3 提前处理，结论回写本节）
 

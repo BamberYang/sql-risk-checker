@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -30,6 +31,10 @@ public final class HtmlReporter {
 
     public static final String REPORT_FILE_NAME = "sql_risk_report.html"; // §17
     private static final String SPAN_END = "</span>";
+    /** 生成时间展示（v1.11）：上海时区 yyyy-MM-dd HH:mm:ss.SSS。 */
+    private static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Shanghai");
+    private static final DateTimeFormatter GENERATED_AT_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
 
     private HtmlReporter() {
     }
@@ -77,7 +82,8 @@ public final class HtmlReporter {
                         ? "<span class=\"kv\">prod <code>" + escape(abbreviate(report.prodCommit())) + "</code></span>"
                         : "<span class=\"kv\">prod —</span>")
                 .append("<span class=\"kv\">生成时间 ").append(escape(
-                        report.generatedAt().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME))).append(SPAN_END)
+                        report.generatedAt().atZoneSameInstant(DISPLAY_ZONE)
+                                .format(GENERATED_AT_FORMAT))).append(SPAN_END)
                 .append("</div>\n</header>\n");
     }
 

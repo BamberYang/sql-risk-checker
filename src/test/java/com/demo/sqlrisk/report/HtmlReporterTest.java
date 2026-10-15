@@ -41,7 +41,7 @@ class HtmlReporterTest {
         // 运行头
         assertTrue(html.contains("mode=DIFF") || html.contains(">DIFF<"), html);
         assertTrue(html.contains("prod") && html.contains("b7c1d2e"), "DIFF 展示 prod 缩略");
-        assertTrue(html.contains(ReportFixtures.GENERATED_AT), "生成时间");
+        assertTrue(html.contains("2026-10-14 08:00:00.000"), "生成时间（上海时区 yyyy-MM-dd HH:mm:ss.SSS）");
         // 统计与恒等式（含"通过"数量）
         assertTrue(html.contains("高危") && html.contains("中危") && html.contains("低危")
                 && html.contains("SKIP") && html.contains("已忽略"), html);
