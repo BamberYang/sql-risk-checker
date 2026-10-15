@@ -44,11 +44,11 @@ java -jar target/sql-risk-checker-shaded.jar --repo <path> --prod-commit <sha> -
 - **Sonar 设计性例外**：CLI 契约本身使用的 `System.out/System.err`（S106）、`System.exit`（S1147）、顶层 `Throwable` 兜底（S1181）、值对象构造器参数多（S107）等属于设计要求；此类命中须**集中登记豁免（附理由/替代保障/失效条件）于 `docs/sonar-exceptions.md`**，不得就地静默抑制（`@SuppressWarnings` 需注明规则与原因）。生产代码的 stderr 诊断统一走 `util/Diagnostics.warn`（唯一豁免点）。
 - **元数据为必需输入（v1.8 起来源为数据库）**：启动时经 JDBC **一次加载**（只读、加载后连接即关；连接失败/权限不足/超时 → exit 2）；表不在加载结果中 = 无索引（M1 保守命中）。连接配置：yaml `datasource` 段 + CLI（`--db-url/--db-username/--db-password`）+ 环境变量 `SQL_RISK_DB_PASSWORD`（密码优先级 CLI > 环境变量 > yaml）。
 
-模块依赖硬约束（概要设计 §3.3）：`cli → core → 其余`；`rule` 不得依赖 `diff`/`extractor`（规则只读 QueryFacts + 上下文）；`model` 零依赖；`config → metadata`、`config → parser`（方言取值校验经 `SqlDialects.supportedNames()`）。跨模块 SPI：`ProductionCommitProvider`（diff）、`MetadataProvider`（metadata）、`RuleProvider`（rule，ServiceLoader）、`SqlDialect`（parser，ServiceLoader 方言扩展）。
+模块依赖硬约束（概要设计 §3.3）：`cli → core → 其余`；`rule` 不得依赖 `diff`/`extractor`（规则只读 QueryFacts + 上下文）；`model` 零依赖；`config → metadata`、`config → parser`（方言取值校验经 `SqlDialects.supportedNames()`）。跨模块 SPI：`ProductionCommitProvider`（diff）、`MetadataProvider`（metadata）、`RuleProvider`（rule，ServiceLoader）、`SqlDialect`（parser，ServiceLoader 方言扩展；内置 mysql + postgresql，oracle 预留）。
 
 ## 技术栈（版本已锁定，概要设计 §3.5）
 
-Java 8 · JGit 5.13.x（6.x 需 Java 11）· Druid 1.2.x · SnakeYAML 1.33 · JavaParser 3.25.x · Gson 2.10.1 · mybatis-plus-core 3.5.7 · slf4j-nop · JUnit 5.10 · MySQL Connector/J 8.0.33（JDBC 驱动，随 shaded jar）· H2 2.2.224（test scope，元数据/黄金用例夹具）。XML 解析用 JDK SAX + Locator（不用 dom4j，决策 D3）。
+Java 8 · JGit 5.13.x（6.x 需 Java 11）· Druid 1.2.x · SnakeYAML 1.33 · JavaParser 3.25.x · Gson 2.10.1 · mybatis-plus-core 3.5.7 · slf4j-nop · JUnit 5.10 · MySQL Connector/J 8.0.33 + PostgreSQL JDBC 42.2.25（JDBC 驱动，随 shaded jar）· H2 2.2.224（test scope，元数据/黄金用例夹具）。XML 解析用 JDK SAX + Locator（不用 dom4j，决策 D3）。
 
 ## 测试约定
 

@@ -2,7 +2,7 @@
 
 基于 **Git 差异（diff）** 的 MyBatis SQL 静态风险检查 CLI：仅提取本次变更涉及的 SQL（mapper.xml / 注解 / MyBatis-Plus Lambda 构造），按**高危 / 中危 / 低危**三级规则分析，输出控制台摘要 + JSON 报告。
 
-> 当前状态：**M0~M9 全部里程碑 + 扩展 M10（数据库元数据，JDBC）/ M11（方言 SPI）完成并经需求方确认**——312 用例全绿（含 14 个黄金样例、H2 元数据夹具、方言扩展端到端）；表元数据自 v1.8 起由**数据库运行时加载**（一次快照），SQL 解析支持**方言扩展**（v1 MySQL，Oracle/PostgreSQL 预留）。
+> 当前状态：**M0~M9 全部里程碑 + 扩展 M10（数据库元数据，JDBC）/ M11（方言 SPI）经需求方确认；PostgreSQL 方言落地（M13）并经需求方确认（含真实 PG 连库验证）**——323 用例全绿（含 15 个黄金样例、H2 元数据夹具、方言扩展端到端）；表元数据自 v1.8 起由**数据库运行时加载**（一次快照），SQL 解析支持**方言扩展**（内置 MySQL/PostgreSQL，Oracle 预留）。
 
 ## 文档
 
@@ -66,7 +66,7 @@ java -jar target/sql-risk-checker-shaded.jar --repo /path/to/repo --config sql-r
 | ---- | ---- |
 | `--repo <path>` | 仓库路径（必需；只读，数据源恒为提交树，不含工作区未提交内容） |
 | `--prod-commit <sha>` | 生产 commit；提供则 DIFF 模式，省略则 FULL 模式 |
-| `--dialect <name>` | SQL 方言，缺省 `mysql`（oracle/postgresql 为预留值，未实现报错） |
+| `--dialect <name>` | SQL 方言 `mysql`\|`postgresql`，缺省 `mysql`（oracle 为预留值，未实现报错） |
 | `--db-url <url>` | 数据库 JDBC URL（元数据来源；未传读 yaml `datasource.url`） |
 | `--db-username <u>` | 数据库账号（未传读 yaml） |
 | `--db-password <pwd>` | 数据库密码（优先级：CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml） |

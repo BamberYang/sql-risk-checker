@@ -1,0 +1,3 @@
+# v1.10/FR-9：PostgreSQL 方言端到端——LIMIT / FETCH FIRST|NEXT ROWS ONLY → hasLimit；
+# 纯 OFFSET 不构成限制（仍全表扫描）→ H3 照常命中
+dialect: postgresql

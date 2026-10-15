@@ -7,6 +7,37 @@
 
 ***
 
+## 2026-10-15
+
+### 进展
+
+- **PostgreSQL 方言落地（M13，FR-9，需求方驱动，需求方已确认）**：
+  - `PostgresDialect`：`DbType.postgresql`；分页识别 = limit 节点且 `rowCount` 非空（`LIMIT n [OFFSET m]`），或文本含 `FETCH FIRST|NEXT n ROWS ONLY`（Druid 1.2.23 未把 FETCH 子句落进 limit 节点——该知识收敛在方言一处）；**纯 OFFSET 保守按无 LIMIT**（跳行不减少扫描量）；UPDATE/DELETE 恒 false（PG 无行限制子句）
+  - **发现并修掉一个真实缺陷**：`QueryFactsBuilder.buildSelect` 的 `block.getLimit() != null` 快捷路径**绕过了方言**——MySQL 语义下与方言判定等价，PG 下把纯 `OFFSET 5` 误判为"有限制" → H3 漏报。改为 `hasLimit` 完全归方言后，ac14 黄金用例如实命中 H3；MySQL 侧逐字节零漂移（15 个黄金用例全量回归验证）
+  - 驱动按 D27 同策略入 pom（PostgreSQL JDBC 42.2.25 → 随 shaded jar，22.2MB）；`--dialect`/报错文案/默认配置注释/README/CLAUDE.md 放开 `postgresql`；Oracle 仍预留
+  - 测试 +9：`PostgresDialectTest`（12 形态正反例）、`SqlDialectsTest`（parse→事实端到端 + 配置放开）、`SqlRiskCheckerMainTest` CLI 冒烟（`--dialect postgresql` 全链路）、黄金用例 `ac14-postgres-dialect`（FETCH FIRST → 无 H3；纯 OFFSET → H3 命中）；**323/323 全绿**
+  - 文档回写：详设 v1.10（§10.7 方言规格/§18.3 用例清单/变更记录）、概要 v1.10（修订行/§3.5 驱动表）、README 状态行、CLAUDE.md 技术栈与 SPI 说明、TASKS M13
+  - 过程插曲 1：ac14 期望报告第一版是从失败日志"抄"的——surefire 的行前缀把 JSON 里形如 `"k": null` 的行吃掉，期望文件因此缺键（prodCommit/changedVia/level），比对持续失败而**肉眼对照日志却"完全一致"**；改为临时调试测试把真实 actual 直接落盘生成 expected 后一次通过，临时类已删除
+  - 过程插曲 2：`default-config.yaml` 昨晚保留了调试用的 url/username（清密码时按选项文本保留），导致 `ac09` 的"datasource.url 未配置"用例失效——**提交 6baa59b 时未复跑全量测试**是疏漏；本次已还原 url/username 为空（本地验证改走 `--db-url/--db-username/--db-password`），ac09 恢复
+- **真实 PostgreSQL 连库验证完成（T13.6，需求方提供连接信息）**：目标 `localhost:5432/postgres?currentSchema=union_order`（用户 loafer），以 `union-order-app` FULL 扫描 + 临时夹具仓库两条路径执行——
+  - 连接与一次加载：9 张表（日志仅 1 次）；**与 MySQL 版报告逐字节一致**（同一仓库，忽略 generatedAt）——方言切换零漂移的最强证据
+  - M1 正反例对照 **PG 库内索引实查**（psql `pg_indexes`）：命中 12 条逐条属实、索引列负例零误报、库外表保守命中（D13）
+  - **PG 专有分页语法端到端**（临时夹具 + 真实 PG 元数据）：`FETCH FIRST 1 ROWS ONLY` → 无 H3（LOW）；纯 `OFFSET 5` → **H3 HIGH**；`WHERE uid = ?` 未命中 M1（PG 库内 uid 索引被正确利用）
+  - **对照实验（方言错配）**：同一样本改 `--dialect mysql` → `FETCH FIRST` 与纯 `OFFSET` 均显式解析失败归 **SKIP**（失败可见、不静默错判，兑现 P3）；`WHERE uid` 照常分析
+  - 失败路径：不存在的角色/库/端口不通 → exit 2 且信息脱敏；报告/日志零密码泄漏；两次运行报告逐字节一致
+  - 环境注记：本机 PG 为 `trust` 认证（本地免密），"错误密码"不构成失败路径——改用"不存在的主体"验证
+
+### 心得
+
+- **快捷路径是方言化的天敌**：hasLimit 的坑（`block.getLimit() != null ||`）只有在第二种方言落地时才暴露——MySQL 单方言下它与方言判定**恰好等价**，正是这种"等价"让它在代码里安然存活。检验抽象是否真的抽象的，只有双实现互证。
+- **替身验证的是机制，不是语义**：M11 的测试替身方言先行走通了 SPI 路径，但把"FETCH FIRST 靠文本判定"这一实现细节留在了替身里；正式实现把它收敛进 `PostgresDialect` 并文档化（Druid 未建 limit 节点的事实），替身保持独立——各归其位。
+- **期望报告必须由真实管线落盘生成，且不得经控制台日志二次搬运**：日志前缀会静默吃掉 `"k": null` 行，"比对失败"与"看起来一模一样"可以同时成立。昨天（ac06 只改 SHA、逐字段 diff）与今天（直接落盘）连续两次同向教训。
+- **改配置也是改代码**：昨晚"只是把调试连接信息清成空密码"的一次顺手编辑，钉死了一个测试；提交前跑全量测试不是仪式，门禁对配置文件同样生效。
+- **失败路径要选"真正会失败"的输入**：本机 PG 走 `trust` 认证，塞一个错误密码照样连通——"错误密码→exit 2"这个在 MySQL 上成立的用例，在 PG 上从断言退化成空操作。改用"不存在的角色/库/端口"才重新变成有效断言；**验证用例的可证伪性要随环境重新确认，不能照着上一个环境的脚本抄**。
+- **对照实验证明机制真的在起作用**：同一份 PG 语法样本换 `--dialect mysql` 跑，`FETCH FIRST` 与纯 `OFFSET` 立刻显式解析失败归 SKIP——既证明方言切换确实改变了行为（不是摆设），也证明失败落在"可见"一侧（P3）而不是静默错判。加上"PG 版与 MySQL 版报告逐字节一致"，两条证据一正一反把方言机制钉死了。
+
+***
+
 ## 2026-10-14
 
 ### 进展

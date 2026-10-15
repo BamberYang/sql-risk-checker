@@ -61,6 +61,7 @@ class AnalysisEngineIT {
             "ac11-dollar-shortcircuit",
             "ac12-annotation-wrapper",
             "ac13-lambda-branches",
+            "ac14-postgres-dialect",
             "m1-metadata-semantics",
             "skip-parse-failed"));
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="com.demo.mapper.OrderMapper">
+  <select id="topOne">SELECT * FROM t_order ORDER BY id FETCH FIRST 1 ROWS ONLY</select>
+  <select id="offsetOnly">SELECT * FROM t_order OFFSET 5</select>
+  <update id="touch">UPDATE t_order SET status = #{s} WHERE id = #{id}</update>
+</mapper>

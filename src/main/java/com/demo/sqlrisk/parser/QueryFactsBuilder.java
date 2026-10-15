@@ -121,7 +121,7 @@ public final class QueryFactsBuilder {
         if (block.getWhere() != null) {
             walkCondition(block.getWhere(), b);
         }
-        b.hasLimit = block.getLimit() != null || b.dialect.hasRowLimit(select);
+        b.hasLimit = b.dialect.hasRowLimit(select); // 分页语义完全归方言（MySQL 与迁移前逐字节一致；PG 纯 OFFSET 不算限制）
     }
 
     private static boolean hasSelectAll(SQLSelectQueryBlock block) {

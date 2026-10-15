@@ -385,7 +385,7 @@ datasource:
   password: ""                    # 建议留空，用环境变量 SQL_RISK_DB_PASSWORD 或 --db-password 提供
   connection_timeout_seconds: 10  # 可选，缺省 10
 
-# SQL 方言（v1 仅 mysql；oracle/postgresql 预留，配置未实现值直接报错）
+# SQL 方言（v1 内置 mysql/postgresql；oracle 预留，配置未实现值直接报错）
 dialect: mysql
 
 # 低危不推荐写法关键字表

@@ -61,7 +61,7 @@ public final class ConfigValidator {
         if (!SqlDialects.supportedNames().contains(normalized)) {
             throw new ConfigException("dialect 暂不支持: " + dialect
                     + "（当前支持: " + String.join(", ", SqlDialects.supportedNames())
-                    + "；oracle/postgresql 为预留值）");
+                    + "；oracle 为预留值）");
         }
     }
 }

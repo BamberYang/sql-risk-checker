@@ -102,6 +102,16 @@ class SqlRiskCheckerMainTest {
     }
 
     @Test
+    void postgresql_dialect_runs_end_to_end_via_cli() throws Exception {
+        // v1.10/FR-9：CLI --dialect postgresql → 配置校验放开 → 按 PG 方言解析（同一夹具全链路可跑通）
+        Path outDir = tempDir.resolve("out-pg");
+        assertEquals(ExitCode.OK, run(withDb("--repo", fixture.path().toString(),
+                "--dialect", "postgresql", "--output", outDir.toString())));
+        assertTrue(outText().contains("mode=FULL"), outText());
+        assertTrue(Files.exists(outDir.resolve("sql_risk_report.json")), "PG 方言下报告照常落盘");
+    }
+
+    @Test
     void full_mode_runs_and_exits_0() throws Exception {
         Path outDir = tempDir.resolve("out-full");
         assertEquals(ExitCode.OK, run(withDb("--repo", fixture.path().toString(),

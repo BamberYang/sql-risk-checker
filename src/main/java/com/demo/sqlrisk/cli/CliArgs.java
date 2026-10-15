@@ -108,7 +108,7 @@ public final class CliArgs {
                 + "  --head-commit <sha>  当前分支最新 commit；缺省取 HEAD。仅分析已提交内容\n"
                 + "  --prod-commit <sha>  生产 commit id；不传则对 head 提交树做全量分析\n"
                 + "  --config <path>      规则/白名单/数据库连接配置文件（yaml）；缺省用内置默认配置\n"
-                + "  --dialect <name>     SQL 方言；缺省 mysql（oracle/postgresql 为预留值，未实现报错）\n"
+                + "  --dialect <name>     SQL 方言 mysql|postgresql；缺省 mysql（oracle 为预留值，未实现报错）\n"
                 + "  --db-url <url>       数据库 JDBC URL（元数据来源；未传读 yaml datasource.url）\n"
                 + "  --db-username <u>    数据库账号（未传读 yaml）\n"
                 + "  --db-password <pwd>  数据库密码（优先级：本参数 > 环境变量 SQL_RISK_DB_PASSWORD > yaml）\n"

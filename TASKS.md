@@ -154,6 +154,24 @@
 
 ***
 
+## M13 PostgreSQL 方言（FR-9 落地，需求方驱动）✅ 2026-10-15（**需求方已确认**）
+
+- [x] **T13.1**（2026-10-15）`PostgresDialect` 实现与注册：`DbType.postgresql`；`hasRowLimit` = limit 节点且 `rowCount` 非空（`LIMIT n [OFFSET m]`）或文本含 `FETCH FIRST|NEXT n ROWS ONLY`（Druid 1.2.23 未归入 limit 节点，方言内受限判定收敛）；**纯 OFFSET 与 UPDATE/DELETE 保守 false**；`SqlDialects` 内置注册 → `supportedNames` 含 `postgresql`
+- [x] **T13.2**（2026-10-15）`hasLimit` 语义完全归方言：`QueryFactsBuilder.buildSelect` 移除 `block.getLimit() != null` 快捷路径（该路径把 PG 纯 OFFSET 误判为"有限制"→ H3 漏报）；MySQL 逐字节零漂移（全量黄金用例回归验证）
+- [x] **T13.3**（2026-10-15）驱动与配置放开：pom 按 D27 同策略内置 PostgreSQL JDBC 42.2.25（compile → 随 shaded jar）；`--dialect`/报错文案/默认配置注释/README/CLAUDE.md 放开 `postgresql`
+- [x] **T13.4**（2026-10-15）测试：`PostgresDialectTest`（12 形态正反例：LIMIT/带 OFFSET/FETCH FIRST|NEXT/纯 OFFSET/无限制/UPDATE/DELETE/INSERT）；`SqlDialectsTest` 端到端事实（parse→hasLimit）+ 配置放开；`SqlRiskCheckerMainTest` CLI 冒烟（`--dialect postgresql` 全链路）；黄金用例 **ac14-postgres-dialect**（FETCH FIRST → 无 H3；纯 OFFSET → H3 命中）
+- [x] **T13.5**（2026-10-15）回归与文档：`mvn -o clean verify` **323/323 全绿**；详设 v1.10（§10.7/§18.3/变更记录）、概要 v1.10（修订行/§3.5 驱动表）、README、CLAUDE.md、JOURNAL 回写
+- [x] **T13.6**（2026-10-15，需求方提供连接信息后执行）真实 PostgreSQL 连库验证（`localhost:5432/postgres?currentSchema=union_order`）：
+  - **连接与一次加载**：加载 9 张表（日志仅 1 次）；库内表清单与 PG 实查一致
+  - **与 MySQL 版报告逐字节一致**（同一仓库 `union-order-app`，忽略 generatedAt）——方言切换零漂移的最强证据
+  - **M1 正反例复核**（对照 PG 库内索引实查）：命中 12 条逐条属实、索引列负例（cash_no/uid/code/credit_no 等）零误报、库外表保守命中（D13）
+  - **PG 专有分页语法端到端**（临时夹具仓库 + 真实 PG 元数据）：`FETCH FIRST 1 ROWS ONLY` → 无 H3（LOW）；纯 `OFFSET 5` → **H3 HIGH**；`WHERE uid = ?` 未命中 M1（PG 库内 uid 索引被正确利用）
+  - **对照实验（方言错配）**：同一样本改 `--dialect mysql` → `FETCH FIRST` 与纯 `OFFSET` 均显式解析失败归 **SKIP**（失败可见，不静默错判，P3）
+  - **失败路径**：不存在的角色/库/端口不通 → exit 2 且信息脱敏；报告/日志零密码泄漏；两次运行报告逐字节一致
+  - 环境注记：本机 PG 为 `trust` 认证（本地免密），"错误密码"不构成失败路径 → 失败路径改以"不存在的主体"验证
+
+***
+
 ## 交付后增补（post-M9，需求方驱动）
 
 - [x] 2026-10-14 入口调试便利：argv 为空 → `DEBUG_DEFAULT_ARGV`（IDE 直跑 main 可调试），stderr 打印 `[调试]` 提示 → 详设 §5

@@ -7,8 +7,8 @@
 | 项    | 内容                                          |
 | ---- | ------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具概要设计                          |
-| 版本   | v1.9                                        |
-| 日期   | 2026-10-14                                  |
+| 版本   | v1.10                                       |
+| 日期   | 2026-10-15                                  |
 | 关联文档 | 《SQL 上线风险静态检查工具需求文档》v1.1（下称"需求文档"）          |
 | 覆盖范围 | 总体架构、模块划分、接口契约、关键流程与算法、数据模型、异常处理、测试设计、需求追溯 |
 | 不含范围 | 类级方法实现细节、逐行伪码、UI 文案细节（归详细设计阶段）              |
@@ -26,6 +26,7 @@
 | v1.6 | 2026-10-14 | 按需求方评审意见更新：确认普通 QueryWrapper / BaseMapper 内置方法**不纳入** v1 扫描范围（写入 §15 已知限制）；确认 JSON 报告追加字段（含 `changeType: FULL`）可接受 |
 | v1.7 | 2026-10-14 | 按需求方评审意见更新：确认 XML 解析采用 JDK SAX + Locator（决策 D3）；全部决策确认完毕，待确认事项清零 |
 | v1.8 | 2026-10-15 | 扩展设计（FR-8/FR-9）：① 元数据来源改为**数据库运行时加载**（JDBC，一次快照），文件元数据通道彻底移除（D24）；② 新增 **`SqlDialect` 方言 SPI**，v1 实现 MySQL、Oracle/PostgreSQL 预留（D25）；③ 连接配置三通道与密码优先级（D26）；④ JDBC 驱动**直接在 pom 中引用**（随 shaded jar 分发）、测试元数据改用 H2 内存库（D27） |
+| v1.10 | 2026-10-15 | FR-9 方言落地：**PostgreSQL 方言实现**（`PostgresDialect`：LIMIT / FETCH FIRST 识别，纯 OFFSET 保守按无 LIMIT）；`hasLimit` 语义完全归方言（MySQL 零漂移）；pom 内置 PostgreSQL JDBC 驱动（D27 同策略）；配置/CLI 放开 `postgresql`；黄金用例 ac14；322 用例全绿 |
 | v1.9 | 2026-10-14 | 代码质量基线（需求方驱动）：**Sonar 代码规范强制**——生成/修改的代码必须满足规范，设计性例外集中登记（`docs/sonar-exceptions.md`）不得就地抑制；§2.1 增补质量目标；存量治理配套的内部契约调整（`RuleContext.facts()` fail-fast、诊断输出统一 `Diagnostics` 出口、`ConfigLoader` 移除未用保留参数）见详细设计 v1.9 |
 
 > 本文档中标注【决策】的条目为概要设计阶段新增的设计决定，标注【假设】的条目需需求方确认后方可进入编码（汇总见 §14）。
@@ -163,7 +164,8 @@ sql-risk-checker/                      # 单模块 Maven 工程
 | slf4j-nop        | 1.7.36                | 静默 JGit 的 slf4j 告警               | 兼容                 |
 | JUnit 5          | 5.10.x                | 单元/集成测试                          | 兼容（test scope）     |
 | JDBC（java.sql）   | JDK 内置                | 元数据加载（FR-8）                      | 兼容（零新增依赖）          |
-| MySQL Connector/J | 8.0.x（compile）        | JDBC 驱动**直接在 pom 中引用**，随 shaded jar 分发（D27） | 兼容；后续 Oracle/PostgreSQL 驱动在对应方言实现时加入 pom |
+| MySQL Connector/J | 8.0.x（compile）        | JDBC 驱动**直接在 pom 中引用**，随 shaded jar 分发（D27） | 兼容 |
+| PostgreSQL JDBC | 42.2.25（compile）     | 方言落地时按 D27 同策略入 pom（v1.10/FR-9） | 兼容；Oracle 驱动待其方言实现时加入 |
 | H2               | 2.2.x                 | 元数据加载与黄金用例的离线测试载体（test scope）     | 兼容（test scope；仅测试使用） |
 
 > 全量依赖离线可解析（内网 Maven 镜像/本地仓库），运行期不访问互联网；连接业务库仅用于读取元数据（FR-8）。

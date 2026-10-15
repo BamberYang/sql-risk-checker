@@ -7,8 +7,8 @@
 | 项    | 内容                                             |
 | ---- | ---------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具详细设计                            |
-| 版本   | v1.9                                           |
-| 日期   | 2026-10-14                                     |
+| 版本   | v1.10                                          |
+| 日期   | 2026-10-15                                     |
 | 关联文档 | 需求文档 v1.1（FR-8/FR-9 扩展）；概要设计 v1.8（决策 D1~D27）     |
 | 本文定位 | 编码直接依据：类结构、方法签名、算法伪码、常量阈值、测试类清单；不包含最终源码本身      |
 | 阅读顺序 | §2 设计约定 → §3 类总览 → §4~§14 分包详设 → §15 异常 → §18 测试 → §19 决策 → §20 追溯 |
@@ -655,28 +655,36 @@ public final class ParsedSql {
 
 ```java
 public interface SqlDialect {
-    String name();                            // 配置值："mysql"（v1 唯一实现）
+    String name();                            // 配置值："mysql" | "postgresql"（v1.10）
     DbType dbType();                          // Druid 方言映射
     boolean hasRowLimit(SQLStatement ast);    // 分页/限制子句识别（H3/L4 的 hasLimit 事实来源）
 }
 
 public final class SqlDialects {              // 注册表（静态注册，确定性顺序）
     public static SqlDialect of(String name);         // 未知 → ConfigException（exit 2，不降级）
-    public static Set<String> supportedNames();       // v1.8：{"mysql"}
+    public static Set<String> supportedNames();       // v1.10：{"mysql", "postgresql"}
 }
 
 public final class MysqlDialect implements SqlDialect {
     // dbType()=DbType.mysql；hasRowLimit()=SELECT 查 queryBlock.getLimit()；
     // UPDATE/DELETE 查 MySqlUpdateStatement/MySqlDeleteStatement.getLimit()（现行为迁入）
 }
+
+public final class PostgresDialect implements SqlDialect {   // v1.10 落地
+    // dbType()=DbType.postgresql；
+    // hasRowLimit()=查询块 limit 节点且 rowCount 非空（LIMIT n [OFFSET m]），
+    //   或文本含 FETCH FIRST|NEXT n ROWS ONLY（Druid 1.2.23 未归入 limit 节点，方言内收敛）；
+    // 纯 OFFSET（跳过行不减少扫描）与 UPDATE/DELETE（PG 无行限制子句）→ false（保守）
+}
 ```
 
-- **预留扩展实现要点**（文档即契约，实现方言时按此落地）：
-  - `PostgresqlDialect`：`DbType.postgresql`；`hasRowLimit` = `LIMIT` 或 `FETCH FIRST n ROWS ONLY`；
+- **扩展实现要点**（文档即契约）：
+  - ~~`PostgresqlDialect`~~ → **v1.10 已实现**：`DbType.postgresql`；`LIMIT` / `FETCH FIRST|NEXT n ROWS ONLY` 识别；
   - `OracleDialect`：`DbType.oracle`；`hasRowLimit` = `FETCH FIRST n ROWS ONLY` 或 WHERE 子树含 `ROWNUM` 谓词（含嵌套子查询包裹形态）；
-  - 新增方言流程 = 实现 `SqlDialect` → `SqlDialects` 注册 → 用例（含分页识别正/反例）→ 放开配置值与 `supportedNames`；核心管线与 13 条规则**零改动**。
+  - 新增方言流程（DD-14，v1.10 已按此完整走通一遍）= 实现 `SqlDialect` → `SqlDialects` 注册 → 用例（分页识别正/反例 + 黄金用例 `ac14`）→ 放开配置值与 `supportedNames` → pom 入 JDBC 驱动（D27 同策略）；核心管线与 13 条规则**零改动**。
+- **hasLimit 语义完全归方言**（v1.10 修正）：`QueryFactsBuilder` 的 SELECT 分支不再保留 `block.getLimit() != null` 快捷路径（该路径使 PG 纯 OFFSET 被误判为"有限制"）；MySQL 行为逐字节不变（`MysqlDialect` 同判定），黄金用例全量回归验证。
 - 方言贯穿点：`DruidSqlParser.parse(sql, dialect)`（§10.4）与 `QueryFactsBuilder` 的 `hasLimit`（§10.5）；**方言经 `ParseContext` 装配**（M11 实现回写：3 参构造缺省 MySQL 保持兼容，引擎以配置值注入）；报告/snippet 渲染仍统一走 `SQLUtils.toMySqlString`（展示层，与解析方言解耦）。
-- 未实现方言值（`oracle`/`postgresql`）→ **ConfigException exit 2**（明确报错，不静默降级为 MySQL 解析）。
+- 未实现方言值（`oracle`）→ **ConfigException exit 2**（明确报错，不静默降级为 MySQL 解析）。
 
 ***
 
@@ -1081,6 +1089,7 @@ src/test/resources/cases/<caseId>/
 | `m1-metadata-semantics`      | 表不在元数据 → 无索引；类型缺失 → M4 不判定                                  |
 | `ac12-annotation-wrapper`    | 注解 `${ew.customSqlSegment}` + `@Param("ew") Wrapper` 参数：仅 SQL 变更 → 不命中 M8（代换解析、uncertain）；仅参数行变更致绑定失配 → 恢复 M8（v1.4）；代换后仍不可解析（固定条件与 `${ew.sqlSegment}` 混排）→ 空骨架归 SKIP（v1.6） |
 | `ac13-lambda-branches`       | Lambda 控制流分支：if/else 两骨架（首命中即停）；switch default 路径骨架命中 H1（skeleton=1，含分支保守附注）；分支体内行变更照常提取（v1.5） |
+| `ac14-postgres-dialect`      | PostgreSQL 方言端到端（v1.10）：`FETCH FIRST 1 ROWS ONLY` → 无 H3；纯 `OFFSET 5` → H3 命中（跳行不减少扫描，保守按无 LIMIT）；`UPDATE … WHERE` 通过 |
 
 > v1.8：全部用例的元数据改为用例内 `schema.sql` 经 H2 建库后由 `JdbcMetadataProvider` 加载（`m1-metadata-semantics` 的语义断言不变）；`ac09` 新增"连接失败（非法 url）→ exit 2"与"方言未支持 → exit 2"两个错误形态。
 
@@ -1204,7 +1213,7 @@ SQL 上线风险静态检查工具 v0.1
   --head-commit <sha>  当前分支最新 commit；缺省取 HEAD。仅分析已提交内容
   --prod-commit <sha>  生产 commit id；不传则对 head 提交树做全量分析
   --config <path>      规则/白名单/数据库连接配置文件（yaml）；缺省用内置默认配置
-  --dialect <name>     SQL 方言；缺省 mysql（oracle/postgresql 为预留值，未实现报错）
+  --dialect <name>     SQL 方言 mysql|postgresql；缺省 mysql（oracle 为预留值，未实现报错）
   --db-url <url>       数据库 JDBC URL（元数据来源；未传读 yaml datasource.url）
   --db-username <u>    数据库账号（未传读 yaml）
   --db-password <pwd>  数据库密码（优先级：本参数 > 环境变量 SQL_RISK_DB_PASSWORD > yaml）
@@ -1235,5 +1244,7 @@ SQL 上线风险静态检查工具 v0.1
 *v1.8（2026-10-15，需求方扩展驱动，FR-8/FR-9）：① §7 重写——元数据改为 `JdbcMetadataProvider` **JDBC 一次加载**（连接即关、失败 exit 2），文件通道（`JsonMetadataProvider`/`--metadata`/`metadata_file`）移除（D24/DD-13）；② §10.4/§10.5/新增 §10.7——`SqlDialect` 方言 SPI（MySQL 实现 + Oracle/PG 预留要点 + 未支持值报错，D25/DD-14）；③ §6 增 `DataSourceSetting` 与连接三通道/密码优先级（D26）；④ §7/§18.2 JDBC 驱动**pom 内嵌**（MySQL Connector/J）与 H2 测试载体（D27/DD-15，2026-10-15 确认）；⑤ §5/§13/§15/§17/§18/附录 B 同步。*
 
 *v1.8 实现回写（2026-10-15，M10/M11 落地）：① §7 类型跨库别名归一（CHARACTER VARYING/CHAR VARYING→VARCHAR、CHARACTER→CHAR、INTEGER→INT，H2 实测）；② §6 ConfigLoader 增环境变量注入重载（测试用，密码优先级语义不变）；③ §10.7 方言经 `ParseContext` 装配（3 参构造缺省 MySQL，引擎注入配置值）；④ 概要设计 §3.3 依赖图新增 `config → parser` 边（方言取值校验经 `SqlDialects.supportedNames()`，无环）。*
+
+*v1.10（2026-10-15，FR-9 方言落地，需求方驱动）：**PostgreSQL 方言实现**——① §10.7 新增 `PostgresDialect`（`DbType.postgresql`；`LIMIT n` 按 limit 节点 `rowCount` 判定；`FETCH FIRST|NEXT n ROWS ONLY` 因 Druid 1.2.23 未入 limit 节点而在方言内做受限文本判定；纯 OFFSET 与 UPDATE/DELETE 保守 false）；② **`hasLimit` 语义完全归方言**——`QueryFactsBuilder` 移除 `block.getLimit() != null` 快捷路径（修正 PG 纯 OFFSET 被误判为有限制；MySQL 逐字节零漂移，全量黄金用例回归）；③ pom 按 D27 同策略内置 PostgreSQL JDBC 驱动（42.2.25，随 shaded jar）；④ 配置/CLI/README/默认配置文案放开 `postgresql`；⑤ 测试：`PostgresDialectTest`（12 形态正反例）+ `SqlDialectsTest` 端到端事实 + CLI 冒烟 + 黄金用例 `ac14-postgres-dialect`；323 用例全绿。*
 
 *v1.9（2026-10-14，Sonar 规范治理，需求方驱动）：① §14 新增 `Diagnostics`——诊断输出统一出口，生产代码 `System.err` 用法集中至此一处（S106 设计性豁免登记化）；② §11.1 `RuleContext.facts()` 契约收紧——语句级上下文（parsedSql=null）调用即抛 `IllegalStateException`（fail fast，原返回 null 的误用隐患消除；引擎 `safeCheck` 兜底不变，S2259 类问题根治）；③ §6 `ConfigLoader` 移除未使用的 `repoPath` 保留参数（S1172）；④ 全量代码按 Sonar 规范重构（复杂度拆分、重复字面量常量化、循环→Stream、断言规范等），设计性例外集中登记于 `docs/sonar-exceptions.md`（S106/S107/S1181）；⑤ §18.3 `ac06` 夹具按 S7158 调整（`String.isEmpty()`）并更新 expected 的 head SHA（语义字段零漂移）。*

@@ -17,10 +17,31 @@ class SqlDialectsTest {
 
     @Test
     void supported_names_include_builtin_and_service_loaded_dialect() {
-        // 内置 mysql + test classpath 服务文件注册的 test-dialect（扩展路径验证）
+        // 内置 mysql/postgresql + test classpath 服务文件注册的 test-dialect（扩展路径验证）
         assertTrue(SqlDialects.supportedNames().contains("mysql"));
+        assertTrue(SqlDialects.supportedNames().contains("postgresql"));
         assertTrue(SqlDialects.supportedNames().contains("test-dialect"),
                 "ServiceLoader 注册的方言应出现在支持列表：" + SqlDialects.supportedNames());
+    }
+
+    @Test
+    void postgresql_is_builtin_and_configurable() {
+        assertTrue(SqlDialects.of("POSTGRESQL") instanceof PostgresDialect, "取值大小写不敏感");
+        ConfigValidator.validateDialect("postgresql"); // 不抛异常 = 配置层已放开取值（D25 动态提供）
+    }
+
+    @Test
+    void postgres_dialect_feeds_limit_facts_end_to_end() {
+        PostgresDialect pg = new PostgresDialect();
+        String limited = "SELECT * FROM t_order FETCH FIRST 5 ROWS ONLY";
+        QueryFacts facts = QueryFactsBuilder.build(
+                DruidSqlParser.parse(limited, pg), null, SqlSkeleton.base(limited), pg);
+        assertTrue(facts.hasLimit(), "PG FETCH FIRST → hasLimit 事实（H3/L4 输入）");
+
+        String unlimited = "SELECT * FROM t_order";
+        QueryFacts plain = QueryFactsBuilder.build(
+                DruidSqlParser.parse(unlimited, pg), null, SqlSkeleton.base(unlimited), pg);
+        assertFalse(plain.hasLimit(), "无分页子句 → 无 hasLimit");
     }
 
     @Test
@@ -43,6 +64,7 @@ class SqlDialectsTest {
                 () -> SqlDialects.of("oracle"));
         assertTrue(e.getMessage().contains("未知方言"), e.getMessage());
         assertTrue(e.getMessage().contains("mysql"), e.getMessage());
+        assertTrue(e.getMessage().contains("postgresql"), e.getMessage());
     }
 
     @Test

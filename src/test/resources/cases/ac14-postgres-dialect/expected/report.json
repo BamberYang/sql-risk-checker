@@ -1,0 +1,84 @@
+{
+  "generatedAt": "2026-10-14T08:00:00+08:00",
+  "mode": "FULL",
+  "headCommit": "30a2c5c1b6a0dac9eacb59b6e29f921aebb28bf2",
+  "prodCommit": null,
+  "summary": {
+    "total": 3,
+    "high": 1,
+    "medium": 0,
+    "low": 1,
+    "skip": 0,
+    "ignored": 0
+  },
+  "results": [
+    {
+      "statementId": "com.demo.mapper.OrderMapper.topOne",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 3,
+      "changeType": "FULL",
+      "sql": "SELECT * FROM t_order ORDER BY id FETCH FIRST 1 ROWS ONLY",
+      "findings": [
+        {
+          "ruleId": "L1",
+          "level": "LOW",
+          "message": "使用了不推荐写法：SELECT *",
+          "snippet": "SELECT * FROM t_order ORDER BY id FETCH FIRST 1 ROWS ONLY",
+          "skeleton": 0
+        },
+        {
+          "ruleId": "L2",
+          "level": "LOW",
+          "message": "SELECT * 且已有过滤，建议显式列出字段",
+          "snippet": "SELECT * FROM t_order ORDER BY id FETCH FIRST 1 ROWS ONLY",
+          "skeleton": 0
+        }
+      ],
+      "level": "LOW",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.offsetOnly",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 4,
+      "changeType": "FULL",
+      "sql": "SELECT * FROM t_order OFFSET 5",
+      "findings": [
+        {
+          "ruleId": "H3",
+          "level": "HIGH",
+          "message": "SELECT 无有效过滤条件（无 WHERE 且无 LIMIT），存在全表扫描风险",
+          "snippet": "SELECT * FROM t_order OFFSET 5",
+          "skeleton": 0
+        },
+        {
+          "ruleId": "L1",
+          "level": "LOW",
+          "message": "使用了不推荐写法：SELECT *",
+          "snippet": "SELECT * FROM t_order OFFSET 5",
+          "skeleton": 0
+        }
+      ],
+      "level": "HIGH",
+      "uncertain": false,
+      "changedVia": null
+    },
+    {
+      "statementId": "com.demo.mapper.OrderMapper.touch",
+      "source": "MAPPER_XML",
+      "file": "src/main/resources/mapper/OrderMapper.xml",
+      "line": 5,
+      "changeType": "FULL",
+      "sql": "UPDATE t_order SET status = #{s} WHERE id = #{id}",
+      "findings": [],
+      "level": null,
+      "uncertain": false,
+      "changedVia": null
+    }
+  ],
+  "ignored": [],
+  "skipped": []
+}

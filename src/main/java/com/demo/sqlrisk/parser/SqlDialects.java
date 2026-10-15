@@ -11,7 +11,7 @@ import java.util.TreeMap;
 
 /**
  * 方言注册表（详细设计 §10.7，v1.8/FR-9）：
- * 内置 {@link MysqlDialect} + {@link ServiceLoader} 外部方言（META-INF/services，与规则 SPI 同形态）；
+ * 内置 {@link MysqlDialect}、{@link PostgresDialect} + {@link ServiceLoader} 外部方言（META-INF/services，与规则 SPI 同形态）；
  * 同名冲突以内置优先并告警忽略；名称按字典序稳定排列（确定性）。
  *
  * <p>扩展路径（验收 T11.2 以测试替身验证）：实现 {@link SqlDialect} → 注册服务文件 → 配置
@@ -25,6 +25,7 @@ public final class SqlDialects {
     static {
         Map<String, SqlDialect> map = new TreeMap<String, SqlDialect>();
         register(map, new MysqlDialect());
+        register(map, new PostgresDialect());
         for (SqlDialect dialect : ServiceLoader.load(SqlDialect.class)) {
             registerExternal(map, dialect);
         }
