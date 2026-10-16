@@ -5,7 +5,7 @@ import java.util.Objects;
 /**
  * 数据库连接配置（详细设计 §6，v1.8/FR-8）：元数据来源；加载一次、只读、加载后即关闭。
  *
- * <p>密码已按优先级（CLI &gt; 环境变量 {@code SQL_RISK_DB_PASSWORD} &gt; yaml）解析为最终值；
+ * <p>密码已按优先级（CLI &gt; 环境变量 {@code SQL_RISK_DB_PASSWORD} &gt; 配置文件）解析为最终值；
  * 日志与错误信息一律脱敏（不含密码）。</p>
  */
 public final class DataSourceSetting {

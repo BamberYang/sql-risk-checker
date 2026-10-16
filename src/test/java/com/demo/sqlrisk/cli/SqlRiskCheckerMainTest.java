@@ -46,11 +46,10 @@ class SqlRiskCheckerMainTest {
                         "<mapper namespace=\"m\"><select id=\"s\">SELECT v2</select></mapper>"))
                 .finish();
         // v1.8/FR-8：元数据来源为数据库——显式配置指向 H2 空库（语义等价旧"空元数据"）
-        dbConfig = tempDir.resolve("db.yaml");
-        Files.write(dbConfig, ("datasource:\n"
-                + "  url: \"jdbc:h2:mem:main-test;DB_CLOSE_DELAY=-1\"\n"
-                + "  username: sa\n"
-                + "  password: \"\"\n").getBytes(StandardCharsets.UTF_8));
+        dbConfig = tempDir.resolve("db.properties");
+        Files.write(dbConfig, ("datasource.url=jdbc:h2:mem:main-test;DB_CLOSE_DELAY=-1\n"
+                + "datasource.username=sa\n"
+                + "datasource.password=\n").getBytes(StandardCharsets.UTF_8));
     }
 
     private int run(String... argv) {
@@ -148,9 +147,10 @@ class SqlRiskCheckerMainTest {
     @Test
     void whitelist_hit_is_counted_as_ignored_end_to_end() throws Exception {
         // ac07 口径：白名单命中语句不参与分析，进入 ignored[]，不影响退出码
-        Path cfg = tempDir.resolve("whitelist.yaml");
-        Files.write(cfg, ("whitelist:\n  statements:\n    - m.s\n"
-                + "datasource:\n  url: \"jdbc:h2:mem:main-test;DB_CLOSE_DELAY=-1\"\n  username: sa\n")
+        Path cfg = tempDir.resolve("whitelist.properties");
+        Files.write(cfg, ("whitelist.statements.0=m.s\n"
+                + "datasource.url=jdbc:h2:mem:main-test;DB_CLOSE_DELAY=-1\n"
+                + "datasource.username=sa\n")
                 .getBytes(StandardCharsets.UTF_8));
         Path outDir = tempDir.resolve("out-whitelist");
         assertEquals(ExitCode.OK, run("--repo", fixture.path().toString(),
@@ -183,7 +183,7 @@ class SqlRiskCheckerMainTest {
     @Test
     void explicit_missing_config_file_exits_2() {
         assertEquals(ExitCode.USAGE_ENV_ERROR,
-                run("--repo", fixture.path().toString(), "--config", tempDir.resolve("nope.yaml").toString()));
+                run("--repo", fixture.path().toString(), "--config", tempDir.resolve("nope.properties").toString()));
         assertTrue(errText().contains("配置文件不存在"));
     }
 

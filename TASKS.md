@@ -190,6 +190,7 @@
       - **认知复杂度拆分**（S3776 ×23，含 `LambdaSkeletonRenderer.applyCalls` 101 → 分组方法、`LambdaSqlExtractor.buildModels` 36 → 单一职责拆分）与 S135 循环跳转收敛 ×10。
       - **设计性例外集中登记**：`docs/sonar-exceptions.md`（EX-1 S106 标准流 / EX-2 S1181 顶层 Throwable 兜底 / EX-3 S107 值对象构造器 ×4），含理由、替代保障与失效条件；SonarCloud 侧按 Accepted 标记。
       - **回归**：`mvn -o clean verify` **314 用例全绿**（含 14 黄金样例，ac06 夹具按 S7158 调整后 expected 仅 head SHA 变化、语义零漂移）；详设 v1.9 回写；**复扫待执行验证**（预期剩余 = 登记例外）
+- [x] 2026-10-16 **配置格式 yaml → properties（需求驱动）**：内置默认资源 `default-config.yaml` → `default-config.properties`；解析改 `java.util.Properties.load(Reader)`（UTF-8 字符流，避免 ISO-8859-1 中文乱码）；扁平键 `rules.<ruleId>.level|enabled` + 列表键 `low_risk_keywords[.<n>]` / `whitelist.statements[.<n>]`（单值与下标二选一、**混用报错**、单值空值 = 清空）；`enabled` 非法文本报错（不用 `Boolean.parseBoolean`）；ruleId 经 `TreeMap` 聚合保证确定性；`--config` 传 `.yaml`/`.yml` → 直接报错提示格式变更；**移除 SnakeYAML 依赖**（pom + 技术栈表同步，shaded jar 无 `org.yaml`）；3 个黄金夹具改 `config.properties`（ac07/ac08/ac14），`GoldenCase`/`AnalysisEngineIT`/`SqlRiskCheckerMainTest`/`CliArgsTest` 同步；`ConfigLoaderTest` 16 → 21；**328 用例全绿、黄金报告逐字节无变化**；需求 v1.2 / 概要 v1.11 / 详设 v1.12（§6 新增配置键清单）/ README / CLAUDE.md / JOURNAL 回写
 
 ## 预研风险清单（M0.3 提前处理，结论回写本节）
 

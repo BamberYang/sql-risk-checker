@@ -9,7 +9,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * 运行配置（详细设计 §6）：三层合并（内置默认 &lt; 用户 yaml &lt; CLI）后的不可变结果。
+ * 运行配置（详细设计 §6）：三层合并（内置默认 &lt; 用户配置文件 &lt; CLI）后的不可变结果。
  */
 public final class AppConfig {
 

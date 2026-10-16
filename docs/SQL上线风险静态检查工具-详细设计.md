@@ -7,8 +7,8 @@
 | 项    | 内容                                             |
 | ---- | ---------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具详细设计                            |
-| 版本   | v1.11                                          |
-| 日期   | 2026-10-15                                     |
+| 版本   | v1.12                                          |
+| 日期   | 2026-10-16                                     |
 | 关联文档 | 需求文档 v1.1（FR-8/FR-9 扩展）；概要设计 v1.8（决策 D1~D27）     |
 | 本文定位 | 编码直接依据：类结构、方法签名、算法伪码、常量阈值、测试类清单；不包含最终源码本身      |
 | 阅读顺序 | §2 设计约定 → §3 类总览 → §4~§14 分包详设 → §15 异常 → §18 测试 → §19 决策 → §20 追溯 |
@@ -121,9 +121,9 @@ public final class CliArgs {                    // 手写解析，不引入 CLI 
     @Nullable String configPath;
     String outputDir = ".";                     // 缺省当前目录
     @Nullable String dialect;                   // v1.8：缺省 mysql
-    @Nullable String dbUrl;                     // v1.8：覆盖 yaml datasource.url
+    @Nullable String dbUrl;                     // v1.8：覆盖配置文件 datasource.url
     @Nullable String dbUsername;                // v1.8
-    @Nullable String dbPassword;                // v1.8：优先级 CLI > 环境变量 > yaml
+    @Nullable String dbPassword;                // v1.8：优先级 CLI > 环境变量 > 配置文件
     boolean verbose;
     // parse(String[]) 抛 CliUsageException（exit 2）；--help 打印后 exit 0
     // 已移除参数：--metadata（v1.8/D24，出现 → 参数错误 exit 2）
@@ -174,23 +174,42 @@ public final class RuleSetting { String ruleId; RiskLevel level; boolean enabled
 public final class DataSourceSetting {
     String url;                                 // 必填（CLI --db-url 可提供）
     @Nullable String username;
-    @Nullable String password;                  // 已按 CLI > 环境变量 > yaml 解析后的最终值
+    @Nullable String password;                  // 已按 CLI > 环境变量 > 配置文件 解析后的最终值
     int connectionTimeoutSeconds = 10;          // §17
 }
 ```
 
 `ConfigLoader.load(CliOverrides overrides)` 流程（v1.8 起以不可变 `CliOverrides{configPath, dialect, dbUrl, dbUsername, dbPassword}` 携带 CLI 值，避免 config 包反向依赖 cli，§3.3；另有 `load(overrides, Map<String,String> env)` 重载供测试注入环境变量——M10 实现回写；v1.9 移除未使用的 `repoPath` 保留参数）：
 
-1. 读内置 `resources/default-config.yaml` → 用户 `--config` 文件覆盖 → CLI 覆盖（dialect / db-url / db-username / db-password）。
-2. yaml 解析（SnakeYAML `safeLoad`，禁用任意对象构造）；未知顶层键 → stderr 警告忽略；已移除键 `bulk_operation_threshold`、`conservative_if_always_false`、**`metadata_file`（v1.8/D24）** → 告警并忽略。
-3. 密码解析优先级（D26）：`--db-password` > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml `datasource.password`；日志一律脱敏。
+1. 读内置 `resources/default-config.properties` → 用户 `--config` 文件覆盖 → CLI 覆盖（dialect / db-url / db-username / db-password）。
+2. **properties 解析（v1.12，`java.util.Properties.load(Reader)`，UTF-8 字符流**——不用 `load(InputStream)`，其固定 ISO-8859-1 解码会使中文注释/关键字乱码；SnakeYAML 依赖与 yaml 通道移除）；未知键 → stderr 警告忽略；已移除键 `bulk_operation_threshold`、`conservative_if_always_false`、**`metadata_file`（v1.8/D24）** → 告警并忽略；`--config` 传入 `.yaml`/`.yml` → **直接报错**（格式已变更，避免被当作一堆未知键静默忽略）。
+3. 密码解析优先级（D26）：`--db-password` > 环境变量 `SQL_RISK_DB_PASSWORD` > `datasource.password`；日志一律脱敏。
 4. `ConfigValidator` 校验（错误 → `ConfigException`，含字段级消息）：
-   - `rules[].ruleId` 必须存在于内置规则表，未知 → 警告忽略；
-   - `rules[].level ∈ {HIGH,MEDIUM,LOW}`；`enabled` 布尔；
+   - `rules.<ruleId>` 的 ruleId 必须存在于内置规则表，未知 → 警告忽略；
+   - `rules.<ruleId>.level ∈ {HIGH,MEDIUM,LOW}`；`rules.<ruleId>.enabled ∈ {true,false}`（不用 `Boolean.parseBoolean`：非法文本会被静默当作 false）；
    - 白名单模式必须满足 `完整匹配` 或 `namespace.*`（正则：`^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*(\.\*)?$`，且 `*` 仅可出现在末尾段），非法 → 报错；
    - `low_risk_keywords` 元素非空；
    - **`dialect` 必须 ∈ `SqlDialects.supportedNames()`（v1 仅 `mysql`），否则报错（D25）**；
    - **`datasource.url` 缺失（且 CLI 未提供）→ 报错；须以 `jdbc:` 开头**。
+
+**配置键清单（v1.12，properties 扁平键方案）**：
+
+| 键                              | 形态 | 内置默认                 | 说明                                                     |
+| ------------------------------ | -- | -------------------- | ------------------------------------------------------ |
+| `dialect`                      | 单值 | `mysql`              | 取值必须 ∈ `SqlDialects.supportedNames()`（D25）             |
+| `datasource.url`               | 单值 | 空                    | 必填（可经 `--db-url` 提供），须 `jdbc:` 前缀                       |
+| `datasource.username`          | 单值 | 空                    | 可空                                                     |
+| `datasource.password`          | 单值 | 空                    | 最低优先级；**不 trim**（首尾空格可能是密码本身）                          |
+| `datasource.connection_timeout_seconds` | 单值 | `10`                 | 正整数；非整数或 ≤0 → 报错                                       |
+| `rules.<ruleId>.level`         | 单值 | 按内置 13 条规则           | 用户配置缺省 → 继承既有值                                         |
+| `rules.<ruleId>.enabled`       | 单值 | `true`               | 用户配置缺省 → 继承既有值                                         |
+| `low_risk_keywords[.<n>]`      | 列表 | `SELECT *`、`OR 1=1`   | 单值键与下标键二选一（见下）                                         |
+| `whitelist.statements[.<n>]`   | 列表 | 空                    | 同上；元素按白名单模式校验                                          |
+
+- 列表键两种写法**二选一**：单值键 `key=<v>`（= 仅有一个元素；**空值 = 空列表**，用于显式清空）；下标键 `key.<n>=<v>`（n 从 0 起、可稀疏、**按下标升序**取值，与书写顺序无关）。**混用 → 报错**（语义含糊不猜测）。
+- 列表键一旦出现即**整体替换**（与 v1.8 既有合并语义一致，不做逐元素合并）。
+- ruleId 经 `TreeMap` 聚合：`Properties` 底层是无序 `Hashtable`，排序保证合并结果确定、与键书写顺序无关。
+- 键值分隔符 `=` 与 `:` 等价；**注释必须独占一行**（行首 `#` / `!`），行内 `#` 属于值的一部分；值内的 `=`、空格、`*` 无需转义或引号（写引号会原样保留为值的一部分）。
 
 ***
 
@@ -240,7 +259,7 @@ public final class JdbcMetadataProvider implements MetadataProvider {
 - 一次加载语义：`load` 在 P1 调用**一次**；同一进程不做第二次连接/加载（NFR）。
 - 失败语义（承接 D12 v1.8 修订）：连接失败 / 权限不足 / `getTables|getColumns|getIndexInfo` 抛错 / 超时 → `MetadataException`（exit 2），无降级路径。
 - `find` 未命中 → `Optional.empty()`（语义 = 该表无任何索引，M1/M6 按未命中判定）。
-- 已移除（v1.8/D24）：`JsonMetadataProvider`、`--metadata`、yaml `metadata_file`（后者出现时告警忽略）；`examples/sql-risk-metadata.example.json` 不再随库交付。
+- 已移除（v1.8/D24）：`JsonMetadataProvider`、`--metadata`、配置文件键 `metadata_file`（后者出现时告警忽略）；`examples/sql-risk-metadata.example.json` 不再随库交付。
 
 ***
 
@@ -1065,7 +1084,7 @@ SqlRiskException (abstract, extends RuntimeException, int exitCode, String messa
 src/test/resources/cases/<caseId>/
 ├── repo/            # 初始提交内容（相对路径 → 文件）
 ├── changes/         # 第二次提交的改动（覆盖/新增/删除标记）
-├── config.yaml      # 可选，缺省用内置
+├── config.properties # 可选，缺省用内置（v1.12：原 config.yaml）
 ├── schema.sql       # 可选：H2 兼容 DDL，测试启动时执行到内存库（v1.8 替代 metadata.json）
 ├── args             # 手工场景的参数（供 IT 直跑调试）
 └── expected/report.json
@@ -1213,11 +1232,11 @@ SQL 上线风险静态检查工具 v0.1
   --repo <path>        目标 Git 仓库绝对路径（必填）
   --head-commit <sha>  当前分支最新 commit；缺省取 HEAD。仅分析已提交内容
   --prod-commit <sha>  生产 commit id；不传则对 head 提交树做全量分析
-  --config <path>      规则/白名单/数据库连接配置文件（yaml）；缺省用内置默认配置
+  --config <path>      规则/白名单/数据库连接配置文件（properties）；缺省用内置默认配置
   --dialect <name>     SQL 方言 mysql|postgresql；缺省 mysql（oracle 为预留值，未实现报错）
-  --db-url <url>       数据库 JDBC URL（元数据来源；未传读 yaml datasource.url）
-  --db-username <u>    数据库账号（未传读 yaml）
-  --db-password <pwd>  数据库密码（优先级：本参数 > 环境变量 SQL_RISK_DB_PASSWORD > yaml）
+  --db-url <url>       数据库 JDBC URL（元数据来源；未传读配置文件 datasource.url）
+  --db-username <u>    数据库账号（未传读配置文件）
+  --db-password <pwd>  数据库密码（优先级：本参数 > 环境变量 SQL_RISK_DB_PASSWORD > 配置文件）
   --output <path>      报告输出目录；缺省当前目录
   --format json        显式声明结构化输出（缺省即控制台 + JSON 双输出）
   --verbose            输出详细过程日志与中低危明细（stderr）
@@ -1251,3 +1270,5 @@ SQL 上线风险静态检查工具 v0.1
 *v1.10（2026-10-15，FR-9 方言落地，需求驱动）：**PostgreSQL 方言实现**——① §10.7 新增 `PostgresDialect`（`DbType.postgresql`；`LIMIT n` 按 limit 节点 `rowCount` 判定；`FETCH FIRST|NEXT n ROWS ONLY` 因 Druid 1.2.23 未入 limit 节点而在方言内做受限文本判定；纯 OFFSET 与 UPDATE/DELETE 保守 false）；② **`hasLimit` 语义完全归方言**——`QueryFactsBuilder` 移除 `block.getLimit() != null` 快捷路径（修正 PG 纯 OFFSET 被误判为有限制；MySQL 逐字节零漂移，全量黄金用例回归）；③ pom 按 D27 同策略内置 PostgreSQL JDBC 驱动（42.2.25，随 shaded jar）；④ 配置/CLI/README/默认配置文案放开 `postgresql`；⑤ 测试：`PostgresDialectTest`（12 形态正反例）+ `SqlDialectsTest` 端到端事实 + CLI 冒烟 + 黄金用例 `ac14-postgres-dialect`；323 用例全绿。*
 
 *v1.9（2026-10-14，Sonar 规范治理，需求驱动）：① §14 新增 `Diagnostics`——诊断输出统一出口，生产代码 `System.err` 用法集中至此一处（S106 设计性豁免登记化）；② §11.1 `RuleContext.facts()` 契约收紧——语句级上下文（parsedSql=null）调用即抛 `IllegalStateException`（fail fast，原返回 null 的误用隐患消除；引擎 `safeCheck` 兜底不变，S2259 类问题根治）；③ §6 `ConfigLoader` 移除未使用的 `repoPath` 保留参数（S1172）；④ 全量代码按 Sonar 规范重构（复杂度拆分、重复字面量常量化、循环→Stream、断言规范等），设计性例外集中登记于 `docs/sonar-exceptions.md`（S106/S107/S1181）；⑤ §18.3 `ac06` 夹具按 S7158 调整（`String.isEmpty()`）并更新 expected 的 head SHA（语义字段零漂移）。*
+
+*v1.12（2026-10-16，需求驱动）：**配置格式由 yaml 改为 properties**——① §6 重写加载流程与**配置键清单**（`java.util.Properties.load(Reader)` + UTF-8 字符流；`rules.<ruleId>.level|enabled` 扁平键；列表键支持单值键与下标键、混用报错、单值空值 = 空列表；ruleId 经 `TreeMap` 聚合保证确定性）；② 内置默认资源 `default-config.yaml` → `default-config.properties`；③ `--config` 传入 `.yaml`/`.yml` → 直接报错并提示格式变更；④ 移除 SnakeYAML 依赖（pom 与技术栈表同步）；⑤ §18.2 夹具清单 `config.yaml` → `config.properties`；⑥ 附录 B 帮助文本同步；需求文档 v1.2 / 概要设计 v1.11 同步。*

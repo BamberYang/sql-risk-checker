@@ -21,7 +21,6 @@
 
     <jgit.version>5.13.3.202401111512-r</jgit.version>
     <druid.version>1.2.23</druid.version>
-    <snakeyaml.version>1.33</snakeyaml.version>
     <javaparser.version>3.25.10</javaparser.version>
     <gson.version>2.10.1</gson.version>
     <mybatis-plus.version>3.5.7</mybatis-plus.version>
@@ -47,12 +46,7 @@
       <version>${druid.version}</version>
     </dependency>
 
-    <!-- yaml 配置解析（§9.2） -->
-    <dependency>
-      <groupId>org.yaml</groupId>
-      <artifactId>snakeyaml</artifactId>
-      <version>${snakeyaml.version}</version>
-    </dependency>
+    <!-- 配置解析（§9.2）：properties 由 JDK java.util.Properties 承担，不再引入 SnakeYAML -->
 
     <!-- Java 源码解析：Lambda 构造 / 注解 / 实体表列映射（FR-2） -->
     <dependency>

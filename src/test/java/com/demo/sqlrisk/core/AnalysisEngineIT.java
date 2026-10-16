@@ -93,9 +93,9 @@ class AnalysisEngineIT {
         String dbUrl = openCaseDatabase(goldenCase);
 
         String configPath = null;
-        if (goldenCase.configYaml() != null) {
-            Path configFile = repoPath.resolve("case-config.yaml");
-            Files.write(configFile, goldenCase.configYaml().getBytes(StandardCharsets.UTF_8));
+        if (goldenCase.configProperties() != null) {
+            Path configFile = repoPath.resolve("case-config.properties");
+            Files.write(configFile, goldenCase.configProperties().getBytes(StandardCharsets.UTF_8));
             configPath = configFile.toString();
         }
 
@@ -193,8 +193,8 @@ class AnalysisEngineIT {
                     .commit("prod", goldenCase.initialFiles())
                     .commit("head", goldenCase.changedFiles(), goldenCase.deletedFiles())
                     .finish();
-            Path badConfig = repoDir.resolve("bad-config.yaml");
-            Files.write(badConfig, "whitelist:\n  statements:\n    - \"com.*.mapper\"\n"
+            Path badConfig = repoDir.resolve("bad-config.properties");
+            Files.write(badConfig, "whitelist.statements.0=com.*.mapper\n"
                     .getBytes(StandardCharsets.UTF_8));
             CliOverrides badOverrides = new CliOverrides(badConfig.toString(), null,
                     "jdbc:h2:mem:ac09;DB_CLOSE_DELAY=-1", "sa", "");

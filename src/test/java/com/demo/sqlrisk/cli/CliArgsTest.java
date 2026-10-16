@@ -15,14 +15,14 @@ class CliArgsTest {
     void parses_all_options() {
         CliArgs args = CliArgs.parse(new String[]{
                 "--repo", "/repo", "--head-commit", "h1", "--prod-commit", "p1",
-                "--config", "/c.yaml", "--output", "/out",
+                "--config", "/c.properties", "--output", "/out",
                 "--dialect", "mysql", "--db-url", "jdbc:mysql://h/db",
                 "--db-username", "u", "--db-password", "p",
                 "--format", "json", "--verbose"});
         assertEquals("/repo", args.repoPath());
         assertEquals("h1", args.headCommit());
         assertEquals("p1", args.prodCommit());
-        assertEquals("/c.yaml", args.configPath());
+        assertEquals("/c.properties", args.configPath());
         assertEquals("/out", args.outputDir());
         assertEquals("mysql", args.dialect());
         assertEquals("jdbc:mysql://h/db", args.dbUrl());

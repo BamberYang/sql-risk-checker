@@ -1,3 +1,0 @@
-whitelist:
-  statements:
-    - "com.demo.mapper.M.legacyOne"

@@ -21,7 +21,7 @@ import java.util.stream.Stream;
  * ├── repo/                 初始提交（prod）的全部文件（UTF-8 文本，至少一个文件）
  * ├── changes/              可选：第二次提交（head）新增/修改的文件（同名覆盖）
  * ├── deleted.txt           可选：head 提交时删除的文件路径（每行一个，# 开头为注释）
- * ├── config.yaml           可选
+ * ├── config.properties     可选（v1.11 起为 properties，替代原 config.yaml）
  * ├── schema.sql            可选：H2 兼容 DDL，测试启动时执行到内存库（v1.8 替代 metadata.json）
  * ├── args                  可选：手工场景的命令行参数文本
  * └── expected/report.json  期望报告（JSON，必需）
@@ -34,7 +34,7 @@ public final class GoldenCase {
     private final Map<String, String> changedFiles;
     private final Set<String> deletedFiles;
     private final String expectedReportJson;
-    private final String configYaml;   // nullable
+    private final String configProperties;   // nullable
     private final String schemaSql;    // nullable：H2 内存库建表 DDL（元数据来源，v1.8/FR-8）
     private final String argsText;     // nullable
 
@@ -43,7 +43,7 @@ public final class GoldenCase {
                        Map<String, String> changedFiles,
                        Set<String> deletedFiles,
                        String expectedReportJson,
-                       String configYaml,
+                       String configProperties,
                        String schemaSql,
                        String argsText) {
         this.caseDir = caseDir;
@@ -51,7 +51,7 @@ public final class GoldenCase {
         this.changedFiles = changedFiles;
         this.deletedFiles = deletedFiles;
         this.expectedReportJson = expectedReportJson;
-        this.configYaml = configYaml;
+        this.configProperties = configProperties;
         this.schemaSql = schemaSql;
         this.argsText = argsText;
     }
@@ -75,7 +75,7 @@ public final class GoldenCase {
                 Files.isDirectory(changesDir) ? readTree(changesDir) : Collections.<String, String>emptyMap(),
                 readDeleted(caseDir.resolve("deleted.txt")),
                 new String(Files.readAllBytes(expected), StandardCharsets.UTF_8),
-                readOptional(caseDir.resolve("config.yaml")),
+                readOptional(caseDir.resolve("config.properties")),
                 readOptional(caseDir.resolve("schema.sql")),
                 readOptional(caseDir.resolve("args")));
     }
@@ -105,8 +105,8 @@ public final class GoldenCase {
     }
 
     /** 可为 null。 */
-    public String configYaml() {
-        return configYaml;
+    public String configProperties() {
+        return configProperties;
     }
 
     /** 可为 null：H2 兼容 DDL（v1.8 起元数据经内存库加载，见 AnalysisEngineIT）。 */

@@ -40,7 +40,7 @@ public final class CliOverrides {
         return dbUsername;
     }
 
-    /** 可为 null；优先级最高（CLI &gt; 环境变量 &gt; yaml）。 */
+    /** 可为 null；优先级最高（CLI &gt; 环境变量 &gt; 配置文件）。 */
     public String dbPassword() {
         return dbPassword;
     }

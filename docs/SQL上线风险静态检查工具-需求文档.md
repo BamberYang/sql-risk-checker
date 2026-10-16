@@ -9,8 +9,8 @@
 | 项    | 内容                 |
 | ---- | ------------------ |
 | 文档名称 | SQL 上线风险静态检查工具需求文档 |
-| 版本   | v1.1               |
-| 日期   | 2026-10-15         |
+| 版本   | v1.2               |
+| 日期   | 2026-10-16         |
 
 修订记录：
 
@@ -18,6 +18,7 @@
 | ---- | ---------- | --------------------------------------------------------------------- |
 | v1.0 | 2026-10-13 | 首版                                                                    |
 | v1.1 | 2026-10-15 | 扩展需求：新增 FR-8「数据库元数据加载」（移除文件元数据通道）、FR-9「多数据库与多方言」（预留扩展点）；同步 §4/§6/§9/§10/§11/§12/§13/§14/§15/§16 |
+| v1.2 | 2026-10-16 | 配置格式落地（原 §9【假设】二选一已定）：**采用 `properties`**（Java `java.util.Properties`，UTF-8），替代 yaml；§9 配置样例、§6 CLI 参数说明、§11 技术栈、§13 连接配置通道表述同步 |
 
 
 
@@ -273,9 +274,9 @@
 | `--output <path>`     | 否  | 报告输出目录，缺省输出到当前目录                                |
 | `--format json`       | 否  | 指定结构化输出（默认控制台 + JSON 双输出）                       |
 | `--dialect <name>`    | 否  | SQL 方言，缺省 `mysql`；`oracle`/`postgresql` 为预留值（见 FR-9） |
-| `--db-url <jdbc-url>` | 条件 | 数据库 JDBC URL（元数据来源）；未提供时读 yaml `datasource.url` |
-| `--db-username <u>`   | 条件 | 数据库账号；未提供时读 yaml                          |
-| `--db-password <pwd>` | 否  | 数据库密码（不建议明文）；未提供时读环境变量 `SQL_RISK_DB_PASSWORD`，再读 yaml |
+| `--db-url <jdbc-url>` | 条件 | 数据库 JDBC URL（元数据来源）；未提供时读配置文件 `datasource.url` |
+| `--db-username <u>`   | 条件 | 数据库账号；未提供时读配置文件                          |
+| `--db-password <pwd>` | 否  | 数据库密码（不建议明文）；未提供时读环境变量 `SQL_RISK_DB_PASSWORD`，再读配置文件 |
 
 * 退出码约定：`0` 无高危；`1` 存在高危风险；`2` 参数 / 环境错误（便于程序化判断）。
 
@@ -287,13 +288,13 @@
 
 * **元数据来源**：表 / 字段类型 / 索引信息不再由 JSON 文件提供；工具启动时通过 JDBC 从数据库读取**一次**，进程内缓存复用，运行期内**不重复加载**。
 
-* **连接配置**：yaml `datasource` 段（url / username / password / connection_timeout_seconds）为主，CLI 参数覆盖；密码优先级：**CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml**。JDBC 驱动直接在 pom 中引用（随包分发），无需配置驱动路径。
+* **连接配置**：配置文件 `datasource.*` 键（url / username / password / connection_timeout_seconds）为主，CLI 参数覆盖；密码优先级：**CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > 配置文件**。JDBC 驱动直接在 pom 中引用（随包分发），无需配置驱动路径。
 
 * **只读使用**：连接仅用于读取元数据（`DatabaseMetaData` / information_schema），加载完成后即关闭；**不执行任何业务 SQL**。
 
 * **失败语义**：连接失败 / 账号权限不足 / 元数据查询失败 / 超时 → 明确错误信息 + exit 2（JDBC 驱动以 Maven 依赖随包内置，见 §12）。
 
-* **通道移除**：原 `--metadata` 参数与 yaml `metadata_file` 键**移除**（后者出现时告警忽略，不静默生效）。
+* **通道移除**：原 `--metadata` 参数与配置文件 `metadata_file` 键**移除**（后者出现时告警忽略，不静默生效）。
 
 
 
@@ -364,40 +365,36 @@
 
 ## 9. 配置设计
 
-采用 `properties` 或 `yaml`（【假设】默认 `yaml`，可扩展）承载规则、白名单与**数据库连接**等配置；表元数据本身不再落任何文件，由工具连接数据库**运行时读取一次**（见 9.1、FR-8）。
+采用 **`properties`**（Java `java.util.Properties`，UTF-8 读取；v1.2 定案，原【假设】二选一）承载规则、白名单与**数据库连接**等配置；表元数据本身不再落任何文件，由工具连接数据库**运行时读取一次**（见 9.1、FR-8）。
 
 
 
 ```
-# rules: 内置规则的级别调整与开关（同 ruleId 覆盖）
-rules:
-  - ruleId: H1
-    level: HIGH
-    enabled: true
-  - ruleId: M1
-    level: MEDIUM
-    enabled: true
+# rules.<ruleId>: 内置规则的级别调整与开关（同 ruleId 覆盖）
+rules.H1.level=HIGH
+rules.H1.enabled=true
+rules.M1.level=MEDIUM
+rules.M1.enabled=true
+
+# 注释独占一行（行首 # 或 !）；行内 # 属于值的一部分
 
 # 数据库连接（元数据来源；加载一次、只读、加载后即关闭）
-datasource:
-  url: "jdbc:mysql://127.0.0.1:3306/union_order"
-  username: "readonly"
-  password: ""                    # 建议留空，用环境变量 SQL_RISK_DB_PASSWORD 或 --db-password 提供
-  connection_timeout_seconds: 10  # 可选，缺省 10
+# password 建议留空，用环境变量 SQL_RISK_DB_PASSWORD 或 --db-password 提供
+datasource.url=jdbc:mysql://127.0.0.1:3306/union_order
+datasource.username=readonly
+datasource.password=
+datasource.connection_timeout_seconds=10
 
 # SQL 方言（v1 内置 mysql/postgresql；oracle 预留，配置未实现值直接报错）
-dialect: mysql
+dialect=mysql
 
-# 低危不推荐写法关键字表
-low_risk_keywords:
-  - "SELECT *"
-  - "OR 1=1"
+# 低危不推荐写法关键字表（下标键逐条追加；单值键 low_risk_keywords= 表示整体替换为空表）
+low_risk_keywords.0=SELECT *
+low_risk_keywords.1=OR 1=1
 
 # 白名单：命中则跳过分析；仅支持完整匹配 与 namespace.* 前缀匹配
-whitelist:
-  statements:
-    - "com.demo.mapper.OrderMapper.selectById"   # 精确
-    - "com.demo.mapper.*"                          # 前缀
+whitelist.statements.0=com.demo.mapper.OrderMapper.selectById
+whitelist.statements.1=com.demo.mapper.*
 ```
 
 > 已移除键（配置中出现时告警并忽略，不静默生效）：`metadata_file`（文件元数据通道已移除，见 FR-8）、`conservative_if_always_false`、`bulk_operation_threshold`。
@@ -494,7 +491,7 @@ whitelist:
 | Git 差异       | **JGit**                                    | 需要 `git diff` 能力                 |
 | SQL 解析       | **Alibaba Druid SQL 解析器**（`SQLParserUtils`） | 按方言（DbType）解析 + 动态 SQL 预处理；多方言原生支持 |
 | XML 解析       | `dom4j` 或 JDK 自带 `DocumentBuilder`          | 解析 mapper.xml                    |
-| 配置           | `yaml`（SnakeYAML）                           | 便于规则扩展                           |
+| 配置           | `properties`（JDK `java.util.Properties`）      | 零依赖、便于规则扩展（v1.2 定案）              |
 | 元数据加载        | **JDBC**（`java.sql`，JDK 内置）                | 运行时连接数据库读取元数据一次（FR-8）            |
 | JDBC 驱动      | **Maven 依赖直接引用**（MySQL Connector/J，compile） | 随 shaded jar 分发；Oracle/PostgreSQL 驱动在对应方言实现时加入 pom |
 | MyBatis-Plus | **3.5.x**                                   | Lambda 链式方法与 `SFunction` 机制的版本基准 |
@@ -613,16 +610,14 @@ sql-risk-checker
 | 决策项         | 结论                                                                  |
 | ----------- | ------------------------------------------------------------------- |
 | 元数据来源（FR-8） | **改为数据库运行时加载**（JDBC，加载一次、只读、加载后关闭）；文件元数据通道（`--metadata`/`metadata_file`）**彻底移除** |
-| 连接配置通道      | yaml `datasource` 段 + CLI 覆盖；密码优先级 CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml |
+| 连接配置通道      | 配置文件 `datasource.*` 键 + CLI 覆盖；密码优先级 CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > 配置文件 |
 | JDBC 驱动      | **直接在 pom 中引用**（MySQL Connector/J 随 shaded jar 分发）；后续方言驱动在实现时加入 pom    |
 | 多方言（FR-9）   | v1 实现 MySQL；预留 `SqlDialect` SPI，未实现方言值配置时报错 exit 2                     |
 | 测试元数据载体     | 使用 **H2 内存库**（test scope）承载元数据加载与黄金用例的离线测试                           |
 
-> 遗留假设：配置文件格式默认采用
-> `yaml`
-> （如偏好
+> 原遗留假设（配置文件格式二选一）已于 v1.2 定案：采用
 > `properties`
-> 可在编码前调整，不影响架构）。
+> （详见 §9；yaml 通道与 SnakeYAML 依赖一并移除）。
 
 
 

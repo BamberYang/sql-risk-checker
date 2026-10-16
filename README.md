@@ -89,36 +89,36 @@ java -jar target/sql-risk-checker-shaded.jar \
 
 ### 4.2 配置文件（可选，覆盖内置默认）
 
-```yaml
-# sql-risk.yaml —— 三层合并：内置默认 < 本文件 < CLI 参数
-datasource:                      # 元数据来源（必需）
-  url: "jdbc:mysql://127.0.0.1:3306/your_db"
-  username: "reader"             # 建议只读账号
-  password: ""                   # 建议留空，用环境变量 SQL_RISK_DB_PASSWORD 提供
-  connection_timeout_seconds: 10
+```properties
+# sql-risk.properties —— 三层合并：内置默认 < 本文件 < CLI 参数（v1.12 起格式为 properties）
+# 注意：注释只能独占一行（行首 # 或 !），行内的 # 会被当成值的一部分
 
-dialect: mysql                   # mysql | postgresql（oracle 为预留值，配置将报错）
+# 元数据来源（必需）；password 建议留空，用环境变量 SQL_RISK_DB_PASSWORD 提供
+datasource.url=jdbc:mysql://127.0.0.1:3306/your_db
+datasource.username=reader
+datasource.password=
+datasource.connection_timeout_seconds=10
 
-rules:                           # 按 ruleId 覆盖 级别/启停（优先级与短路标记不可配置）
-  - ruleId: M2
-    level: HIGH
-  - ruleId: M5
-    enabled: false
+# mysql | postgresql（oracle 为预留值，配置将报错）
+dialect=mysql
 
-low_risk_keywords:               # L1 关键字表（整体替换；大小写不敏感）
-  - "SELECT *"
-  - "OR 1=1"
+# 按 ruleId 覆盖 级别/启停（优先级与短路标记不可配置）
+rules.M2.level=HIGH
+rules.M5.enabled=false
 
-whitelist:                       # 白名单：完整匹配 或 namespace.* 前缀匹配（仅 xml/注解语句参与）
-  statements:
-    - "com.demo.mapper.ReportMapper.selectBig"
-    - "com.demo.legacy.*"
+# L1 关键字表（整体替换；大小写不敏感）
+low_risk_keywords.0=SELECT *
+low_risk_keywords.1=OR 1=1
+
+# 白名单：完整匹配 或 namespace.* 前缀匹配（仅 xml/注解语句参与）
+whitelist.statements.0=com.demo.mapper.ReportMapper.selectBig
+whitelist.statements.1=com.demo.legacy.*
 ```
 
 **数据库连接三通道与密码优先级**：
 
 ```
---db-url/--db-username/--db-password（CLI） > 环境变量 SQL_RISK_DB_PASSWORD（密码） > yaml datasource
+--db-url/--db-username/--db-password（CLI） > 环境变量 SQL_RISK_DB_PASSWORD（密码） > datasource.* 配置键
 ```
 
 > 元数据为**必需输入**：启动时经 JDBC **一次加载**（表 / 字段类型 / 索引）为内存快照，加载后连接立即关闭，运行期不再连库；连接失败/权限不足/超时 → exit 2，无降级路径。**不在快照中的表按"无索引"保守判定**（M1 提示"表不在元数据中"）。
@@ -130,13 +130,13 @@ whitelist:                       # 白名单：完整匹配 或 namespace.* 前�
 | `--repo <path>` | 目标 Git 仓库路径（**必填**；只读，数据源恒为提交树） |
 | `--head-commit <sha>` | 当前分支最新 commit；缺省取 HEAD（仅分析已提交内容） |
 | `--prod-commit <sha>` | 生产 commit；**提供则 DIFF 模式，省略则 FULL 模式** |
-| `--config <path>` | 配置文件（yaml）；缺省用内置默认配置 |
+| `--config <path>` | 配置文件（properties）；缺省用内置默认配置 |
 | `--output <dir>` | 报告输出目录，缺省当前目录；文件名固定 `sql_risk_report.json` / `sql_risk_report.html` |
 | `--format json` | 显式声明结构化输出（缺省即"控制台 + JSON + HTML"三产出，该参数为兼容保留） |
 | `--dialect <name>` | SQL 方言 `mysql`\|`postgresql`，缺省 `mysql`（须与被检查代码的目标库一致） |
-| `--db-url <url>` | 数据库 JDBC URL（元数据来源；未传读 yaml） |
-| `--db-username <u>` | 数据库账号（未传读 yaml） |
-| `--db-password <pwd>` | 数据库密码（优先级：CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml） |
+| `--db-url <url>` | 数据库 JDBC URL（元数据来源；未传读配置文件） |
+| `--db-username <u>` | 数据库账号（未传读配置文件） |
+| `--db-password <pwd>` | 数据库密码（优先级：CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > 配置文件） |
 | `--verbose` | 向 stderr 输出提取/白名单/解析/规则各阶段进度（stdout 报告契约不受影响） |
 | `--help` | 用法与退出码说明 |
 
@@ -153,7 +153,7 @@ CI 卡点示例（通用 shell，按平台放进对应 step 即可）：
 ```bash
 java -jar sql-risk-checker-shaded.jar \
     --repo "$CI_PROJECT_DIR" --prod-commit "$LAST_DEPLOY_SHA" \
-    --config ci/sql-risk.yaml --output build/sql-risk
+    --config ci/sql-risk.properties --output build/sql-risk
 case $? in
   0) echo "✅ 无高危，放行" ;;
   1) echo "⛔ 存在高危 SQL 变更，阻断上线（详见 build/sql-risk 报告）"; exit 1 ;;
@@ -211,7 +211,7 @@ esac
 | 概要设计 | v1.10 | [docs/SQL上线风险静态检查工具-概要设计.md](docs/SQL上线风险静态检查工具-概要设计.md) |
 | 详细设计 | v1.10 | [docs/SQL上线风险静态检查工具-详细设计.md](docs/SQL上线风险静态检查工具-详细设计.md) |
 
-**技术栈**（版本锁定见概要设计 §3.5）：Java 8 · Maven · JGit 5.13.x · Alibaba Druid SQL 1.2.x · SnakeYAML 1.33 · JavaParser 3.25.x · Gson 2.10.1 · MyBatis-Plus 3.5.7（core） · JUnit 5.10 · MySQL Connector/J 8.0.33 + PostgreSQL JDBC 42.2.25（随 shaded jar） · H2 2.2.224（仅测试）。
+**技术栈**（版本锁定见概要设计 §3.5）：Java 8 · Maven · JGit 5.13.x · Alibaba Druid SQL 1.2.x · 配置解析用 JDK `java.util.Properties`（v1.12 起，无第三方依赖） · JavaParser 3.25.x · Gson 2.10.1 · MyBatis-Plus 3.5.7（core） · JUnit 5.10 · MySQL Connector/J 8.0.33 + PostgreSQL JDBC 42.2.25（随 shaded jar） · H2 2.2.224（仅测试）。
 
 **目录结构**（概要设计 §3.4）：
 
@@ -219,7 +219,7 @@ esac
 src/main/java/com/demo/sqlrisk/
 ├── cli/          # 入口、参数解析（CliArgs）、退出码
 ├── core/         # 阶段编排 P0~P9（AnalysisEngine）、白名单过滤、汇总
-├── config/       # yaml 三层合并与校验（ConfigLoader/CliOverrides）
+├── config/       # properties 三层合并与校验（ConfigLoader/CliOverrides）
 ├── metadata/     # 表元数据（MetadataProvider SPI；JdbcMetadataProvider 一次快照）
 ├── diff/         # JGit 差异获取 / 全量扫描（ProductionCommitProvider SPI）
 ├── extractor/    # 语句提取：xml/（mapper.xml+片段传播）、annotation/（注解+常量+Provider）、lambda/（MyBatis-Plus）

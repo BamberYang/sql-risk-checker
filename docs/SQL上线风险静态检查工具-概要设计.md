@@ -7,8 +7,8 @@
 | 项    | 内容                                          |
 | ---- | ------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具概要设计                          |
-| 版本   | v1.10                                       |
-| 日期   | 2026-10-15                                  |
+| 版本   | v1.11                                       |
+| 日期   | 2026-10-16                                  |
 | 关联文档 | 《SQL 上线风险静态检查工具需求文档》v1.1（下称"需求文档"）          |
 | 覆盖范围 | 总体架构、模块划分、接口契约、关键流程与算法、数据模型、异常处理、测试设计、需求追溯 |
 | 不含范围 | 类级方法实现细节、逐行伪码、UI 文案细节（归详细设计阶段）              |
@@ -27,6 +27,7 @@
 | v1.7 | 2026-10-14 | 按评审意见更新：确认 XML 解析采用 JDK SAX + Locator（决策 D3）；全部决策确认完毕，待确认事项清零 |
 | v1.8 | 2026-10-15 | 扩展设计（FR-8/FR-9）：① 元数据来源改为**数据库运行时加载**（JDBC，一次快照），文件元数据通道彻底移除（D24）；② 新增 **`SqlDialect` 方言 SPI**，v1 实现 MySQL、Oracle/PostgreSQL 预留（D25）；③ 连接配置三通道与密码优先级（D26）；④ JDBC 驱动**直接在 pom 中引用**（随 shaded jar 分发）、测试元数据改用 H2 内存库（D27） |
 | v1.10 | 2026-10-15 | FR-9 方言落地：**PostgreSQL 方言实现**（`PostgresDialect`：LIMIT / FETCH FIRST 识别，纯 OFFSET 保守按无 LIMIT）；`hasLimit` 语义完全归方言（MySQL 零漂移）；pom 内置 PostgreSQL JDBC 驱动（D27 同策略）；配置/CLI 放开 `postgresql`；黄金用例 ac14；322 用例全绿 |
+| v1.11 | 2026-10-16 | 需求驱动（需求文档 v1.2）：**配置格式由 yaml 改为 properties**——内置默认 `default-config.properties`、`java.util.Properties` 解析（UTF-8）、扁平键 `rules.<ruleId>.level\|enabled` 与下标列表键；移除 SnakeYAML 依赖（§3.5）；`.yaml/.yml` 配置路径直接报错；§3.2/§3.4/§5.1/§5.2/§9.1/§9.2/§12.2/D26 同步 |
 | v1.9 | 2026-10-14 | 代码质量基线（需求驱动）：**Sonar 代码规范强制**——生成/修改的代码必须满足规范，设计性例外集中登记（`docs/sonar-exceptions.md`）不得就地抑制；§2.1 增补质量目标；存量治理配套的内部契约调整（`RuleContext.facts()` fail-fast、诊断输出统一 `Diagnostics` 出口、`ConfigLoader` 移除未用保留参数）见详细设计 v1.9 |
 
 > 本文档中标注【决策】的条目为概要设计阶段新增的设计决定，标注【假设】的条目需确认后方可进入编码（汇总见 §14）。
@@ -97,7 +98,7 @@
 | ------------ | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cli`        | main 入口、参数解析与校验、退出码、控制台摘要渲染的触发                                      | `SqlRiskCheckerMain`、`CliArgs`、`ExitCode`                                                                                                                |
 | `core`       | 阶段编排（P0~P9）、并行调度、白名单过滤、结果汇总、退出码判定                                   | `AnalysisEngine`、`Pipeline`、`RunContext`、`AnalysisResult`、`WhitelistFilter`                                                                          |
-| `config`     | yaml 配置加载、默认值合并、schema 校验、配置优先级                                     | `AppConfig`、`ConfigLoader`、`ConfigValidator`、`RuleConfig`                                                                                                |
+| `config`     | properties 配置加载、默认值合并、schema 校验、配置优先级                                     | `AppConfig`、`ConfigLoader`、`ConfigValidator`、`RuleConfig`                                                                                                |
 | `metadata`   | 表元数据（表/字段/索引）**由 JDBC 从数据库加载一次**（快照供只读查询），`MetadataProvider` SPI                        | `MetadataProvider`、`JdbcMetadataProvider`、`TableMetadata`、`FieldMeta`、`IndexMeta`                                                                         |
 | `diff`       | JGit 差异获取、全量扫描、变更行集合、`ProductionCommitProvider` SPI                | `GitDiffService`、`ChangeSet`、`FileChange`、`Hunk`、`ProductionCommitProvider`、`RepoWalker`                                                                  |
 | `extractor`  | 语句提取三个实现 + 统一 SPI；statementId 生成；变更类型判定；XML 片段索引与派生变更传播                 | `SqlSourceExtractor`、`MapperXmlExtractor`、`XmlFragmentIndex`、`AnnotationSqlExtractor`、`LambdaSqlExtractor`、`EntityIndex`、`TableColumnResolver`、`JavaConstantResolver`、`ProviderMethodResolver` |
@@ -143,7 +144,7 @@ sql-risk-checker/                      # 单模块 Maven 工程
 │   ├── rule/ {builtin/}
 │   ├── report/  model/  util/
 ├── src/main/resources/
-│   ├── default-config.yaml            # 缺省配置（内置兜底）
+│   ├── default-config.properties      # 缺省配置（内置兜底；v1.11 起替原 default-config.yaml）
 │   └── META-INF/services/             # 规则 SPI 扩展点（ServiceLoader）
 └── src/test/java/...                  # 见 §12
 ```
@@ -157,7 +158,7 @@ sql-risk-checker/                      # 单模块 Maven 工程
 | JDK              | 1.8（编译 target 1.8）    | 运行时                              | 需求已锁定              |
 | JGit             | 5.13.x                | git diff / 仓库读取                  | 6.x 需 Java 11，锁定 5.x |
 | Alibaba Druid    | 1.2.x                 | SQL AST 解析、SchemaStat 事实提取       | 兼容                 |
-| SnakeYAML        | 1.33                  | yaml 配置解析                        | 兼容                 |
+| 配置解析             | JDK `java.util.Properties`（无需依赖） | properties 配置解析（UTF-8 字符流）        | 兼容（v1.11 移除 SnakeYAML） |
 | JavaParser       | 3.25.x（core + symbol-solver） | Java 源码解析（Lambda / 注解 / 实体映射） | 兼容；升级 3.26+ 前需验证 JDK 要求 |
 | Gson             | 2.10.1                | 报告 JSON 序列化（单 jar、零传递依赖）         | 兼容                 |
 | mybatis-plus-core | 3.5.x                 | 链式方法 API 基准、符号解析辅助               | 需求已锁定              |
@@ -179,7 +180,7 @@ sql-risk-checker/                      # 单模块 Maven 工程
 | 阶段  | 名称        | 输入                                | 输出                                              | 失败策略                                    |
 | --- | --------- | --------------------------------- | ----------------------------------------------- | --------------------------------------- |
 | P0  | 参数装配      | 命令行参数                             | `RunContext`                                    | 缺参/非法值 → stderr + exit 2                |
-| P1  | 配置加载校验    | 用户 yaml、缺省配置、数据库连接（元数据来源）          | `AppConfig`、`MetadataProvider`（JDBC 一次加载的快照）   | 配置错误 / 元数据加载失败 → exit 2                  |
+| P1  | 配置加载校验    | 用户配置文件（properties）、缺省配置、数据库连接（元数据来源）          | `AppConfig`、`MetadataProvider`（JDBC 一次加载的快照）   | 配置错误 / 元数据加载失败 → exit 2                  |
 | P2  | 模式判定与差异获取 | repo、head/prod commit              | `ChangeSet`（差异模式）或候选文件清单（全量模式，取自 head 提交树）        | 非 git 仓库/非法 commit → exit 2             |
 | P3  | 语句提取      | `ChangeSet` + extractor SPI + 全仓 XML 片段索引 | `List<ExtractedStatement>`（含片段派生变更命中的语句）+ `skipped[]` | 单文件失败隔离，不终止整体 |
 | P4  | 白名单过滤     | 语句集合 + 白名单配置                      | 分析集合 + `ignored[]`                              | —                                       |
@@ -245,7 +246,7 @@ CLI          Engine         Config/Diff     Extractor      Parser        Rule   
 - 职责：解析参数 → 构造 `RunContext` → 调用 `AnalysisEngine.run()` → 打印摘要 → 返回退出码。
 - 参数定义与需求 FR-7 完全一致（见 §9.1），额外约定：
   - 未知参数、必填缺失、`--format` 取值非 `json`（本版仅支持 json，缺省即"控制台 + JSON 双输出"，该参数用于显式声明）→ 参数错误 exit 2。
-  - 连接参数优先级：`--db-url` / `--db-username` / `--db-password` / `--dialect` 覆盖 yaml 同名项；密码三级优先级 **CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml**（D26）。
+  - 连接参数优先级：`--db-url` / `--db-username` / `--db-password` / `--dialect` 覆盖配置文件同名项；密码三级优先级 **CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > 配置文件**（D26）。
 - 控制台摘要输出到 **stdout**；进度、警告、错误输出到 **stderr**（`--verbose` 控制详细度），保证 stdout 可被管道消费。
 
 ### 5.2 config
@@ -253,7 +254,7 @@ CLI          Engine         Config/Diff     Extractor      Parser        Rule   
 配置加载为"三层合并"，后者覆盖前者：
 
 ```
-内置默认（resources/default-config.yaml） < 用户 yaml < 命令行参数
+内置默认（resources/default-config.properties） < 用户配置文件（--config） < 命令行参数
 ```
 
 校验规则（违反 → exit 2，消息指明字段与原因）：
@@ -673,9 +674,9 @@ boolean hit = id.equals(pattern)                     // 完整匹配
 | `--output <path>`     | 否  | 报告输出目录，缺省当前目录                   |
 | `--format json`       | 否  | 显式声明结构化输出（本版默认即控制台+JSON 双输出）    |
 | `--dialect <name>`    | 否  | SQL 方言，缺省 `mysql`；未实现值 → exit 2（D25） |
-| `--db-url <url>`      | 条件 | 数据库 JDBC URL（元数据来源）；未提供时读 yaml `datasource.url` |
-| `--db-username <u>`   | 条件 | 数据库账号；未提供时读 yaml                  |
-| `--db-password <pwd>` | 否  | 密码优先级：CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > yaml（D26） |
+| `--db-url <url>`      | 条件 | 数据库 JDBC URL（元数据来源）；未提供时读 `datasource.url` |
+| `--db-username <u>`   | 条件 | 数据库账号；未提供时读配置文件                  |
+| `--db-password <pwd>` | 否  | 密码优先级：CLI > 环境变量 `SQL_RISK_DB_PASSWORD` > 配置文件（D26） |
 | `--verbose`           | 否  | 输出详细过程日志与中低危明细（本设计新增，stderr 输出） |
 
 退出码：
@@ -686,11 +687,12 @@ boolean hit = id.equals(pattern)                     // 完整匹配
 | 1 | 存在高危（仅由 HIGH 级别命中决定；SKIP/解析失败不触发）【决策 D6（已确认）】                |
 | 2 | 参数/环境错误：仓库不存在、非 git 仓库、非法 commit、配置错误、方言未支持、数据库元数据加载失败（驱动/连接/权限/超时）、报告写出失败 |
 
-### 9.2 配置文件（yaml，结构与需求 §9 一致）
+### 9.2 配置文件（properties，结构与需求 §9 一致）
 
 见需求 §9。本设计补充：
 
-- `datasource` 段承载数据库连接（url/username/password/connection_timeout_seconds）；密码三级优先级见 D26；JDBC 驱动由 pom 依赖提供（D27），配置中无驱动路径项。
+- **格式为 Java properties（v1.11 起替原 yaml）**：`java.util.Properties` 解析、UTF-8 字符流读取；扁平键 + 下标列表键（`rules.<ruleId>.level`、`low_risk_keywords.<n>`、`whitelist.statements.<n>`），键清单与合并语义见详细设计 §6。传 `.yaml`/`.yml` 路径 → 直接报错并提示格式变更。
+- `datasource.*` 键承载数据库连接（url/username/password/connection_timeout_seconds）；密码三级优先级见 D26；JDBC 驱动由 pom 依赖提供（D27），配置中无驱动路径项。
 - `dialect` 取值必须为已支持方言（v1 仅 `mysql`）；未实现值 → 报错 exit 2（D25）。
 - 未知 `ruleId` → 警告不报错；非法白名单模式 → 报错 exit 2。
 - 已移除键（出现时告警并忽略）：`bulk_operation_threshold`（D18）、`conservative_if_always_false`（D10）、`metadata_file`（v1.8/D24）。
@@ -791,7 +793,7 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 ### 12.2 集成（黄金样例）测试
 
 - 夹具：测试内用 JGit **程序化构造临时 git 仓库**（两次提交分别模拟 prod 与 head），case 目录结构：
-  `cases/<caseId>/{repo/, changes/, schema.sql, config.yaml, expected/report.json}`；其中 `schema.sql` 为 H2 兼容 DDL，测试启动时执行到**内存库**，由 `JdbcMetadataProvider` 加载元数据（v1.8：替代原 `metadata.json`）。
+  `cases/<caseId>/{repo/, changes/, schema.sql, config.properties, expected/report.json}`；其中 `schema.sql` 为 H2 兼容 DDL，测试启动时执行到**内存库**，由 `JdbcMetadataProvider` 加载元数据（v1.8：替代原 `metadata.json`；v1.11：`config.yaml` → `config.properties`）。
 - 比对：运行完整管线，报告 JSON 去除 `generatedAt` 后与 expected 全量比对（固定时钟注入）。
 - 覆盖矩阵：3 种承载形态 × 风险等级 × 差异/全量模式 × 白名单 × 保守策略（AC-4：`<if>` 唯一条件折叠后 WHERE 消失 → 直接命中 H1/H2/H3；`<choose>` 双骨架任一命中即停）；含 SKIP 归类用例（解析失败不计入高危、不影响退出码）。
 - 增量语义用例（v1.3 已确认）：`<sql>` 片段内改动 → 全部（含跨文件、传递引用）语句提取完整 SQL 分析；Lambda 链上任意一行（含 wrapper 执行调用行）改动 → 完整链提取。
@@ -855,7 +857,7 @@ JSON 报告：在需求 §10.2 结构基础上，**新增字段均为追加式�
 | D23 | 决策（已确认） | 普通 `QueryWrapper`（字符串列名）与 `BaseMapper` 内置方法**不纳入** v1 扫描范围（维持需求 FR-2 界定），写入 §15 已知限制 | §5.5.4、§15.1 |
 | D24 | 决策（已确认，2026-10-15） | **元数据来源改为数据库运行时加载**（JDBC `DatabaseMetaData`，一次快照、连接即关）；文件元数据通道（`JsonMetadataProvider`/`--metadata`/`metadata_file`）**彻底移除**；加载失败 → exit 2 | §5.3、§9.3、§10 |
 | D25 | 决策（已确认，2026-10-15） | **方言 SPI `SqlDialect`**（方言名 + Druid DbType + 分页识别）；v1 实现 MySQL，Oracle/PostgreSQL 预留；配置未实现方言值 → **报错 exit 2**（不静默降级）；`dialect` 为配置/CLI 键 | §5.6、§7、§9.1 |
-| D26 | 决策（已确认，2026-10-15） | 连接配置三通道：yaml `datasource` 段 + CLI 覆盖 + 环境变量；**密码优先级 CLI > `SQL_RISK_DB_PASSWORD` > yaml** | §5.1、§9.2 |
+| D26 | 决策（已确认，2026-10-15） | 连接配置三通道：配置文件 `datasource.*` 键 + CLI 覆盖 + 环境变量；**密码优先级 CLI > `SQL_RISK_DB_PASSWORD` > 配置文件** | §5.1、§9.2 |
 | D27 | 决策（已确认，2026-10-15） | JDBC 驱动**直接在 pom 中引用**（MySQL Connector/J，compile scope → 随 shaded jar 分发），无外置驱动目录机制；后续方言驱动在实现时加入 pom；测试元数据载体用 **H2 内存库**（test scope） | §3.5、§5.3、§12 |
 
 **需求文档中未明确、本设计已补齐的能力**：`<include refid>` 解析与片段派生变更（§8.2、§8.1）、`<script>` 注解与 mapper.xml 同管道（§5.5.3）、静态常量与 Provider 方法的静态求值（§5.5.3）、XXE 加固与离线 DTD 兜底（§5.5.2）、元数据一次加载的连接生命周期管理（§5.3）。
