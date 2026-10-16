@@ -30,6 +30,7 @@ public final class QueryFacts {
     private final Set<String> tables;
     private final Map<String, Set<String>> predicateColumnsByTable;
     private final Map<String, Set<String>> joinOnColumnsByTable;
+    private final Map<String, Set<String>> functionWrappedColumnsByTable;
     private final List<Set<String>> orBranchColumns;
     private final boolean hasOr;
     private final boolean hasJoinWithoutOn;
@@ -49,6 +50,7 @@ public final class QueryFacts {
         this.tables = Collections.unmodifiableSet(new TreeSet<String>(builder.tables));
         this.predicateColumnsByTable = immutableCopy(builder.predicateColumnsByTable);
         this.joinOnColumnsByTable = immutableCopy(builder.joinOnColumnsByTable);
+        this.functionWrappedColumnsByTable = immutableCopy(builder.functionWrappedColumnsByTable);
         this.orBranchColumns = builder.orBranchColumns;
         this.hasOr = builder.hasOr;
         this.hasJoinWithoutOn = builder.hasJoinWithoutOn;
@@ -141,6 +143,12 @@ public final class QueryFacts {
     /** 表 t 的 JOIN ON 关联列（可为空集）。 */
     public Set<String> joinOnColumnsOf(String table) {
         Set<String> columns = joinOnColumnsByTable.get(table);
+        return columns == null ? Collections.<String>emptySet() : columns;
+    }
+
+    /** 表 t 被函数包裹的列（函数实参中的列引用；不含 UNRESOLVED），M2 判定输入。 */
+    public Set<String> functionWrappedColumnsOf(String table) {
+        Set<String> columns = functionWrappedColumnsByTable.get(table);
         return columns == null ? Collections.<String>emptySet() : columns;
     }
 

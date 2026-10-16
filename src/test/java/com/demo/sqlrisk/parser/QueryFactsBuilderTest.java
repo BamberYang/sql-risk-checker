@@ -119,6 +119,26 @@ class QueryFactsBuilderTest {
     }
 
     @Test
+    void function_wrapped_columns_are_attributed_to_table() {
+        QueryFacts facts = facts("SELECT * FROM t_order WHERE DATE(create_time) = ? AND status = 1");
+        assertTrue(facts.functionWrappedColumnsOf("t_order").contains("create_time"),
+                "函数实参列按表归属收集（M2 判定输入）");
+        assertFalse(facts.functionWrappedColumnsOf("t_order").contains("status"),
+                "普通比较列的列不算函数包裹列");
+        assertTrue(facts.functionWrappedColumnsOf("t_other").isEmpty(), "无归属的列不产生记录");
+    }
+
+    @Test
+    void function_wrapped_columns_respect_alias_and_nesting() {
+        assertTrue(facts("SELECT * FROM t_order o WHERE DATE(o.create_time) = ?")
+                .functionWrappedColumnsOf("t_order").contains("create_time"), "别名归表");
+        assertTrue(facts("SELECT * FROM t_order WHERE DATE(FROM_UNIXTIME(create_time)) = ?")
+                .functionWrappedColumnsOf("t_order").contains("create_time"), "嵌套函数实参列");
+        assertTrue(facts("SELECT * FROM a, b WHERE DATE(a.x) = ?")
+                .functionWrappedColumnsOf("a").contains("x"), "多表按限定名归属到对应表");
+    }
+
+    @Test
     void implicit_cast_needs_metadata() {
         assertTrue(facts("SELECT * FROM t_order WHERE user_id = '123'", orderMetadata()).hasImplicitCast(),
                 "数值列 vs 字符串字面量");

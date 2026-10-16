@@ -7,7 +7,7 @@
 | 项    | 内容                                             |
 | ---- | ---------------------------------------------- |
 | 文档名称 | SQL 上线风险静态检查工具详细设计                            |
-| 版本   | v1.12                                          |
+| 版本   | v1.13                                          |
 | 日期   | 2026-10-16                                     |
 | 关联文档 | 需求文档 v1.1（FR-8/FR-9 扩展）；概要设计 v1.8（决策 D1~D27）     |
 | 本文定位 | 编码直接依据：类结构、方法签名、算法伪码、常量阈值、测试类清单；不包含最终源码本身      |
@@ -645,6 +645,7 @@ public final class QueryFactsBuilder {
 | `hasCommaJoin`                                | 存在 joinType == COMMA 的连接                                                                     |
 | `orBranches`                                  | WHERE 树中所有 `BooleanOr` 节点的两侧操作数列表（用于 M6）                                                     |
 | `hasFunctionWrappedColumn`                    | 比较表达式任一侧为 `SQLMethodInvokeExpr` 且实参含列引用                                                     |
+| `functionWrappedColumnsByTable`               | 上一条命中的函数**实参列**按表归属（口径同谓词列：别名/单表/UNRESOLVED）；v1.13 起供 M2 查元数据（同键 `functionWrappedColumnsOf(t)`） |
 | `hasLeadingWildcardLike`                      | LIKE 右侧为 `SQLCharExpr` 且以 `%` 开头；或骨架标记 leadingWildcard（Lambda likeLeft）                          |
 | `hasImplicitCast`                             | 列（元数据类型为数值）与字符串字面量比较，或列（字符类型）与数值字面量比较；类型缺失 → false                                          |
 | `droppedBranches`                             | 来自 SqlSkeleton 透传                                                                           |
@@ -796,8 +797,10 @@ if unindexedTables 非空: 命中
 
 #### M2 — 索引列被函数包裹（MEDIUM / 21）
 
-- 判定：`hasFunctionWrappedColumn`；snippet 输出该比较表达式（`SQLUtils.toMySqlString` 化简）。
-- message：`索引列被函数包裹，无法走索引：{expr}`。
+- 判定（v1.13 修正：**须查元数据**，与 M1/M6 同口径）：表 t 的 `functionWrappedColumnsOf(t)` 非空 ∧ 其中某列为该表**某索引的前缀列**（索引本可用、被函数包裹后失效）。
+  - 包裹列无索引前缀可失 → **不判定**：该表"无索引可用"的判定归 M1（需求 §6 M2 命中条件为"**索引列**被函数包裹"；原实现不查元数据，无索引也照报，属实现与设计不一致）。
+  - 表不在元数据中 → 不判定（无索引可讨论，同样归 M1 的"默认无索引"口径）。
+- message：`索引列被函数包裹，无法走索引：t_order(create_time)`；多表逐条串联（同 M1 风格）。
 
 #### M3 — 前导通配符 LIKE（MEDIUM / 22）
 
@@ -1270,5 +1273,7 @@ SQL 上线风险静态检查工具 v0.1
 *v1.10（2026-10-15，FR-9 方言落地，需求驱动）：**PostgreSQL 方言实现**——① §10.7 新增 `PostgresDialect`（`DbType.postgresql`；`LIMIT n` 按 limit 节点 `rowCount` 判定；`FETCH FIRST|NEXT n ROWS ONLY` 因 Druid 1.2.23 未入 limit 节点而在方言内做受限文本判定；纯 OFFSET 与 UPDATE/DELETE 保守 false）；② **`hasLimit` 语义完全归方言**——`QueryFactsBuilder` 移除 `block.getLimit() != null` 快捷路径（修正 PG 纯 OFFSET 被误判为有限制；MySQL 逐字节零漂移，全量黄金用例回归）；③ pom 按 D27 同策略内置 PostgreSQL JDBC 驱动（42.2.25，随 shaded jar）；④ 配置/CLI/README/默认配置文案放开 `postgresql`；⑤ 测试：`PostgresDialectTest`（12 形态正反例）+ `SqlDialectsTest` 端到端事实 + CLI 冒烟 + 黄金用例 `ac14-postgres-dialect`；323 用例全绿。*
 
 *v1.9（2026-10-14，Sonar 规范治理，需求驱动）：① §14 新增 `Diagnostics`——诊断输出统一出口，生产代码 `System.err` 用法集中至此一处（S106 设计性豁免登记化）；② §11.1 `RuleContext.facts()` 契约收紧——语句级上下文（parsedSql=null）调用即抛 `IllegalStateException`（fail fast，原返回 null 的误用隐患消除；引擎 `safeCheck` 兜底不变，S2259 类问题根治）；③ §6 `ConfigLoader` 移除未使用的 `repoPath` 保留参数（S1172）；④ 全量代码按 Sonar 规范重构（复杂度拆分、重复字面量常量化、循环→Stream、断言规范等），设计性例外集中登记于 `docs/sonar-exceptions.md`（S106/S107/S1181）；⑤ §18.3 `ac06` 夹具按 S7158 调整（`String.isEmpty()`）并更新 expected 的 head SHA（语义字段零漂移）。*
+
+*v1.13（2026-10-16，一致性修正）：**M2 判定补上元数据校验**——① §10.5 新增事实 `functionWrappedColumnsByTable`（函数实参列按表归属，`QueryFactsBuilder` 采集口径与谓词列一致）；② §11.4 M2 改为"包裹列须为某索引前缀列"（与 M1/M6 同口径），无索引前缀可失 / 表不在元数据 → 不判定并交 M1（原实现不查元数据，与需求 §6"M2 命中条件 = 索引列被函数包裹"不一致）；③ message 改为 `索引列被函数包裹，无法走索引：t_order(create_time)`（对齐 M1 风格）；④ 测试：`M2RuleTest` 重写为 7 例（含联合索引非首列不报、表不在元数据不报）、`QueryFactsBuilderTest` 补 2 例事实归属；黄金用例无 M2 命中，expected 零变化。*
 
 *v1.12（2026-10-16，需求驱动）：**配置格式由 yaml 改为 properties**——① §6 重写加载流程与**配置键清单**（`java.util.Properties.load(Reader)` + UTF-8 字符流；`rules.<ruleId>.level|enabled` 扁平键；列表键支持单值键与下标键、混用报错、单值空值 = 空列表；ruleId 经 `TreeMap` 聚合保证确定性）；② 内置默认资源 `default-config.yaml` → `default-config.properties`；③ `--config` 传入 `.yaml`/`.yml` → 直接报错并提示格式变更；④ 移除 SnakeYAML 依赖（pom 与技术栈表同步）；⑤ §18.2 夹具清单 `config.yaml` → `config.properties`；⑥ 附录 B 帮助文本同步；需求文档 v1.2 / 概要设计 v1.11 同步。*

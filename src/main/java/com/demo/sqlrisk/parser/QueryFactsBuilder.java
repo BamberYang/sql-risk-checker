@@ -259,10 +259,8 @@ public final class QueryFactsBuilder {
         if (!isComparison(op)) {
             return;
         }
-        if (containsFunctionWithColumn(binary.getLeft())
-                || containsFunctionWithColumn(binary.getRight())) {
-            b.hasFunctionWrappedColumn = true;
-        }
+        recordFunctionWrapped(binary.getLeft(), b);
+        recordFunctionWrapped(binary.getRight(), b);
         if (isLeadingWildcardLike(binary)) {
             b.hasLeadingWildcardLike = true;
         }
@@ -391,16 +389,20 @@ public final class QueryFactsBuilder {
         return Collections.emptyList();
     }
 
-    private static boolean containsFunctionWithColumn(SQLExpr expr) {
+    /**
+     * 函数包裹列（M2 判定输入）：比较表达式一侧为函数调用且实参含列引用时，
+     * 置事实标志并把实参中的列**按表归属**收集（归属口径与谓词列一致，供 M2 查元数据）。
+     */
+    private static void recordFunctionWrapped(SQLExpr expr, Builder b) {
         if (!(expr instanceof SQLMethodInvokeExpr)) {
-            return false;
+            return;
         }
         for (SQLExpr arg : ((SQLMethodInvokeExpr) expr).getArguments()) {
             if (containsColumnRef(arg)) {
-                return true;
+                b.hasFunctionWrappedColumn = true;
+                recordColumns(arg, b.functionWrappedColumnsByTable, b, null);
             }
         }
-        return false;
     }
 
     private static boolean containsColumnRef(SQLExpr expr) {
@@ -484,6 +486,7 @@ public final class QueryFactsBuilder {
         final Set<String> tables = new TreeSet<String>();
         final Map<String, Set<String>> predicateColumnsByTable = new TreeMap<String, Set<String>>();
         final Map<String, Set<String>> joinOnColumnsByTable = new TreeMap<String, Set<String>>();
+        final Map<String, Set<String>> functionWrappedColumnsByTable = new TreeMap<String, Set<String>>();
         final List<Set<String>> orBranchColumns = new ArrayList<Set<String>>();
         boolean hasOr;
         boolean hasJoinWithoutOn;

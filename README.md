@@ -2,7 +2,7 @@
 
 基于 **Git 差异（diff）** 的 MyBatis SQL 静态风险检查 CLI：**只提取本次变更涉及的 SQL**（mapper.xml / 注解 SQL / MyBatis-Plus Lambda 构造），结合**数据库真实表结构（索引/字段）**做静态分析，按 **高危 / 中危 / 低危** 三级规则输出控制台摘要 + JSON + HTML 报告。
 
-> 当前状态：**M0~M9 全部里程碑 + 扩展 M10（数据库元数据，JDBC）/ M11（方言 SPI）/ M13（PostgreSQL 方言）均经确认；真实 MySQL 与 PostgreSQL 连库验证完成**——323 用例全绿（含 15 个黄金样例）。SQL 解析支持方言扩展（内置 MySQL/PostgreSQL，Oracle 预留）；表元数据为**数据库运行时一次加载**的只读快照。
+> 当前状态：**M0~M9 全部里程碑 + 扩展 M10（数据库元数据，JDBC）/ M11（方言 SPI）/ M13（PostgreSQL 方言）均经确认；真实 MySQL 与 PostgreSQL 连库验证完成**——328 用例全绿（含 15 个黄金样例）。SQL 解析支持方言扩展（内置 MySQL/PostgreSQL，Oracle 预留）；表元数据为**数据库运行时一次加载**的只读快照。
 
 ***
 
@@ -42,29 +42,61 @@
 2. 一个能连上的**业务库**（元数据来源，必需）——建议使用**只读账号**；工具只执行 `getTables/getColumns/getIndexInfo` 元数据查询，不读业务数据；
 3. 待检查的 Git 仓库（本地路径即可，只读）。
 
-### 3.1 方式一：命令行运行（打包产物）
+### 3.1 构建产物
 
 ```bash
-# ① 构建（首次需联网拉依赖；之后全程可离线）
-mvn clean package            # 首次
+mvn clean package            # 首次构建（需联网拉依赖）
 mvn -o clean package         # 之后离线构建
 # 产物：target/sql-risk-checker-shaded.jar（已内嵌 MySQL/PostgreSQL JDBC 驱动）
+```
 
-# ② 全量扫描（最简形态：不传 --prod-commit 即 FULL 模式）
+下面两种模式共用同一产物与同一套连接参数，只差一个 `--prod-commit`；模式语义对比见 §4.1。
+
+### 3.2 DIFF 模式（上线卡点：只看本次要发的改动）
+
+传 `--prod-commit` 指定**生产环境正在运行的 commit**，`--head-commit` 缺省取仓库 HEAD——工具只分析两者之间的**变更语句**：
+
+```bash
+java -jar target/sql-risk-checker-shaded.jar \
+    --repo /path/to/your-repo \
+    --prod-commit <生产环境当前运行的 commit sha> \
+    --db-url 'jdbc:mysql://127.0.0.1:3306/your_db' \
+    --db-username reader \
+    --db-password '******' \
+    --output ./report
+```
+
+- 摘要首行为 `mode=DIFF  head=abc1234  prod=def4567`；报告内 `changeType` 为 `ADDED` / `MODIFIED` 等变更类型；
+- `<sql>` 片段（含被 `<include>` 引用、含跨文件与传递引用）变更会传播到全部引用语句，报告内以 `changedVia` 标注来源；
+- `--prod-commit` 与 `--head-commit` 相同 → 空差异（0 条语句，exit 0，正常结束）。
+
+日常卡点用这个模式：噪音最小，报出来的每条都与本次上线有关。
+
+### 3.3 FULL 模式（全量摸底：不传 `--prod-commit`）
+
+省略 `--prod-commit`，工具遍历 head 提交树（缺省仓库 HEAD，可用 `--head-commit` 指定）的**全部语句**：
+
+```bash
 java -jar target/sql-risk-checker-shaded.jar \
     --repo /path/to/your-repo \
     --db-url 'jdbc:mysql://127.0.0.1:3306/your_db' \
     --db-username reader \
     --db-password '******' \
     --output ./report
-
-# ③ 看结果
-#   - 控制台：摘要 + 高危明细
-#   - ./report/sql_risk_report.json  （机器契约，CI 消费）
-#   - ./report/sql_risk_report.html  （阅读层，浏览器直接打开）
 ```
 
-### 3.2 方式二：IDE 直接运行 `main` 方法（开发/调试）
+- 摘要首行为 `mode=FULL  head=abc1234`；报告内 `changeType` 恒为 `FULL`；
+- 适用于**首次接入摸底、存量治理**；语句多、噪音大，不适合做上线卡点（那正是 DIFF 的职责）。
+
+### 3.4 看结果（两种模式一致）
+
+```
+- 控制台：摘要 + 高危明细（含语句片段与命中说明）
+- ./report/sql_risk_report.json  （机器契约，CI 消费）
+- ./report/sql_risk_report.html  （阅读层，浏览器直接打开）
+```
+
+### 3.5 IDE 直接运行 `main` 方法（开发/调试）
 
 不打包，直接在 IDE 中运行入口类 `com.demo.sqlrisk.cli.SqlRiskCheckerMain#main`（IntelliJ 打开工程后 Run/Debug 即可）：
 
@@ -186,7 +218,7 @@ esac
 | 组 | 规则（默认级别可配置、启停可配置；优先级/短路标记固定） |
 | -- | ---- |
 | **H（高危）** | H1 `UPDATE` 无 `WHERE`；H2 `DELETE` 无 `WHERE`；H3 `SELECT` 无 `WHERE` 且无 `LIMIT` |
-| **M（中危）** | M1 条件列未命中索引；M2 索引列被函数包裹；M3 前导通配符 `LIKE '%x'`；M4 隐式类型转换；M5 笛卡尔积（逗号 JOIN 且无跨表关联）；M6 `OR` 两侧存在非索引列；M8 `${}` 拼串（**语句级短路**，含被丢弃分支，注解中 `${ew.customSqlSegment}` 等 Wrapper 段除外） |
+| **M（中危）** | M1 条件列未命中索引；M2 索引列被函数包裹（该列须确有索引前缀，否则归 M1）；M3 前导通配符 `LIKE '%x'`；M4 隐式类型转换；M5 笛卡尔积（逗号 JOIN 且无跨表关联）；M6 `OR` 两侧存在非索引列；M8 `${}` 拼串（**语句级短路**，含被丢弃分支，注解中 `${ew.customSqlSegment}` 等 Wrapper 段除外） |
 | **L（低危）** | L1 配置关键字（`low_risk_keywords`）；L2 `SELECT *` 且已有过滤；L4 有 `WHERE` 但无 `LIMIT`（未限制返回行数） |
 
 补充语义：
@@ -207,9 +239,9 @@ esac
 
 | 文档 | 版本 | 位置 |
 | ---- | ---- | ---- |
-| 需求文档 | v1.1 | [docs/SQL上线风险静态检查工具-需求文档.md](docs/SQL上线风险静态检查工具-需求文档.md) |
-| 概要设计 | v1.10 | [docs/SQL上线风险静态检查工具-概要设计.md](docs/SQL上线风险静态检查工具-概要设计.md) |
-| 详细设计 | v1.10 | [docs/SQL上线风险静态检查工具-详细设计.md](docs/SQL上线风险静态检查工具-详细设计.md) |
+| 需求文档 | v1.2 | [docs/SQL上线风险静态检查工具-需求文档.md](docs/SQL上线风险静态检查工具-需求文档.md) |
+| 概要设计 | v1.12 | [docs/SQL上线风险静态检查工具-概要设计.md](docs/SQL上线风险静态检查工具-概要设计.md) |
+| 详细设计 | v1.13 | [docs/SQL上线风险静态检查工具-详细设计.md](docs/SQL上线风险静态检查工具-详细设计.md) |
 
 **技术栈**（版本锁定见概要设计 §3.5）：Java 8 · Maven · JGit 5.13.x · Alibaba Druid SQL 1.2.x · 配置解析用 JDK `java.util.Properties`（v1.12 起，无第三方依赖） · JavaParser 3.25.x · Gson 2.10.1 · MyBatis-Plus 3.5.7（core） · JUnit 5.10 · MySQL Connector/J 8.0.33 + PostgreSQL JDBC 42.2.25（随 shaded jar） · H2 2.2.224（仅测试）。
 
@@ -236,7 +268,7 @@ src/test/
 **构建与测试**：
 
 ```bash
-mvn -o clean verify          # 离线构建 + 全部测试（323 用例，含黄金样例）
+mvn -o clean verify          # 离线构建 + 全部测试（328 用例，含黄金样例）
 mvn -o test -Dtest=H1RuleTest            # 单个测试类
 mvn -o test -Dtest='H1RuleTest#method'   # 单个测试方法
 ```
